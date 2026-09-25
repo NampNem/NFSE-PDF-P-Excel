@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import zipfile
 
+from duckduckgo_search import DDGS
 from github import Github
 import pandas as pd
 import pdfplumber
@@ -27,41 +28,34 @@ st.write(
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
 
+
 # ============================================================
-# TABELA OFICIAL LC 116 (DESCRIÇÃO DOS SERVIÇOS)
+# FUNÇÃO DE PESQUISA NA INTERNET (DUCKDUCKGO)
 # ============================================================
-TABELA_LC116 = {
-    "0101": "Análise e desenvolvimento de sistemas",
-    "0102": "Programação",
-    "0103": "Processamento, armazenamento ou hospedagem de dados, textos, imagens, vídeos, páginas web, aplicativos e sistemas de informação",
-    "0104": "Elaboração de programas de computadores, inclusive de jogos eletrônicos",
-    "0105": "Licenciamento ou cessão de direito de uso de programas de computação",
-    "0106": "Assessoria e consultoria em informática",
-    "0107": "Suporte técnico em informática, inclusive instalação, configuração e manutenção de programas de computação e bancos de dados",
-    "0108": "Configuração e manutenção de redes, de páginas e de esquemas de nutrição visual",
-    "0109": "Disponibilização de conteúdos de áudio, vídeo, imagem e texto por meio da internet",
-    "0701": "Engenharia, agronomia, agrimensura, arquitetura, geologia, urbanismo, paisagismo e congêneres",
-    "0702": "Execução, por administração, empreitada ou subempreitada, de obras de construção civil, hidráulica ou elétrica",
-    "0703": "Elaboração de planos diretores, estudos de viabilidade, projetos e especificações técnicas",
-    "1001": "Agenciamento, corretagem ou intermediação de câmbio, de títulos e valores mobiliários",
-    "1002": "Agenciamento, corretagem ou intermediação de títulos em geral, valores mobiliários e contratos quaisquer",
-    "1005": "Agenciamento, corretagem ou intermediação de bens móveis ou imóveis",
-    "1401": "Lubrificação, limpeza, lustração, revisão, carga e recarga, conserto, restauração, blindagem, manutenção e conservação de máquinas, veículos, aparelhos, equipamentos",
-    "1701": "Assessoria ou consultoria de qualquer natureza",
-    "1702": "Perícias, laudos, exames técnicos e análises técnicas",
-    "1703": "Planejamento, organização e administração de feiras, exposições, congressos e congêneres",
-    "1704": "Recrutamento, agenciamento, seleção e colocação de mão de obra",
-    "1705": "Fornecimento de mão de obra, mesmo em caráter temporário",
-    "1706": "Propaganda e publicidade, inclusive promoção de vendas, planejamento de campanhas",
-    "1712": "Adestramento, treinamento, ensino e avaliação de qualquer natureza",
-    "1719": "Contabilidade, inclusive serviços técnicos e auxiliares",
-    "1720": "Consultoria e assessoria econômica ou financeira",
-    "2401": "Serviços chaveiros, confecção de carimbos, placas, sinalização visual, banners, adesivos e congêneres",
-}
+def pesquisar_codigo_na_internet(codigo):
+    """Realiza uma busca em tempo real na web para descobrir a descrição do código de tributação."""
+    cod_limpo = re.sub(r"\D", "", str(codigo))
+    if not cod_limpo:
+        return "Código de tributação inválido ou não informado."
+
+    query = f'codigo tributacao "{cod_limpo}" LC 116 ISS servico'
+
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=2))
+            if results:
+                # Retorna o trecho/resumo da primeira busca encontrada
+                primeiro_resultado = results[0].get("body", "")
+                if primeiro_resultado:
+                    return primeiro_resultado
+    except Exception as e:
+        pass
+
+    return f"Não foi possível obter o resumo automático da web para o código {cod_limpo}. Consulte o plano de contas."
 
 
 # ============================================================
-# FUNÇÕES UTILITÁRIAS E AUXILIARES (DECLARADAS PRIMEIRO)
+# FUNÇÕES UTILITÁRIAS E AUXILIARES
 # ============================================================
 def tratar_codigo_tributacao(valor):
     if valor is None:
@@ -70,20 +64,6 @@ def tratar_codigo_tributacao(valor):
     if "/" in texto:
         texto = texto.split("/", 1)[0]
     return texto.strip()
-
-
-def obter_descricao_servico(codigo):
-    cod_limpo = re.sub(r"\D", "", str(codigo))
-    if len(cod_limpo) >= 4:
-        sub_cod = cod_limpo[:4]
-        if sub_cod in TABELA_LC116:
-            return TABELA_LC116[sub_cod]
-    elif len(cod_limpo) >= 2:
-        sub_cod = cod_limpo[:2]
-        for k, v in TABELA_LC116.items():
-            if k.startswith(sub_cod):
-                return v
-    return "Descrição de serviço não localizada na tabela resumida LC 116"
 
 
 def converter_valor(valor):
@@ -749,10 +729,11 @@ if (
         with st.form("form_novos_codigos"):
             novos_cadastros = {}
             for cod in ausentes:
-                desc_lc116 = obter_descricao_servico(cod)
+                with st.spinner(f"Pesquisando o código {cod} na web..."):
+                    desc_web = pesquisar_codigo_na_internet(cod)
 
                 st.markdown(f"### 📌 Código: `{cod}`")
-                st.info(f"📄 **Descrição Oficial (LC 116):** {desc_lc116}")
+                st.info(f"🌐 **Resultado da Consulta Web em tempo real:**\n\n{desc_web}")
 
                 nova_conta = st.text_input(
                     f"Informe a conta débito para o código {cod} (deixe em branco para usar 2135):",
