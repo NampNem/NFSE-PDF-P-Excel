@@ -125,6 +125,28 @@ def extrair_codigo_do_banco(valor):
     return tratar_codigo_tributacao(texto)
 
 
+def extrair_descricao_do_banco(valor):
+    """Extrai a parte de descrição de uma célula 'CÓDIGO - Descrição...'
+    da coluna A do banco_de_dados.xlsx. Retorna '' se não houver descrição."""
+    if valor is None:
+        return ""
+    texto = str(valor).strip()
+    m = re.match(r"^\d{2,8}\s*-\s*(.+)$", texto)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def montar_celula_banco(codigo, descricao):
+    """Monta a célula da coluna A do banco_de_dados.xlsx no formato
+    'CÓDIGO - Descrição', para ficar legível quando o usuário abrir a planilha."""
+    codigo = str(codigo).strip()
+    descricao = str(descricao).strip() if descricao else ""
+    if descricao:
+        return f"{codigo} - {descricao}"
+    return codigo
+
+
 def obter_descricao_servico(codigo, tipo_servico_pdf=None):
     """Retorna a descrição oficial do código de tributação.
     Prioridade: 1) texto extraído do próprio PDF (o mais confiável, vem
@@ -203,7 +225,8 @@ def converter_data_obj(data_str):
 # GERENCIAMENTO DO BANCO DE DADOS (GITHUB)
 # ============================================================
 def carregar_banco_dados_github():
-    mapa_contas = {}
+    """Retorna dict {codigo: {'descricao': str, 'conta': str}}."""
+    mapa = {}
     if os.path.exists(NOME_BANCO_DADOS):
         try:
             if NOME_BANCO_DADOS.endswith(".csv"):
@@ -213,16 +236,23 @@ def carregar_banco_dados_github():
 
             for _, r in df_bd.iterrows():
                 cod = extrair_codigo_do_banco(r[0])
+                descricao = extrair_descricao_do_banco(r[0])
                 conta = str(r[1]).strip() if pd.notna(r[1]) else ""
                 if cod:
-                    mapa_contas[cod] = conta
+                    mapa[cod] = {"descricao": descricao, "conta": conta}
         except Exception as e:
             st.error(f"Erro ao carregar o Banco de Dados: {e}")
-    return mapa_contas
+    return mapa
 
 
-def salvar_banco_dados_github(mapa_contas):
-    df_bd = pd.DataFrame(list(mapa_contas.items()))
+def salvar_banco_dados_github(mapa):
+    """Recebe dict {codigo: {'descricao': str, 'conta': str}} e salva no
+    formato 'CÓDIGO - Descrição' na coluna A, conta na coluna B."""
+    linhas = [
+        (montar_celula_banco(cod, dados.get("descricao", "")), dados.get("conta", ""))
+        for cod, dados in mapa.items()
+    ]
+    df_bd = pd.DataFrame(linhas)
     df_bd.to_excel(NOME_BANCO_DADOS, index=False, header=False)
 
     try:
@@ -270,7 +300,15 @@ with st.sidebar:
 
     mapa_atual = carregar_banco_dados_github()
     df_gerenciador = pd.DataFrame(
-        list(mapa_atual.items()), columns=["Código Tributação", "Conta Débito"]
+        [
+            {
+                "Código Tributação": cod,
+                "Descrição (Operação)": dados.get("descricao", ""),
+                "Conta Débito": dados.get("conta", ""),
+            }
+            for cod, dados in mapa_atual.items()
+        ],
+        columns=["Código Tributação", "Descrição (Operação)", "Conta Débito"],
     )
 
     df_editado = st.data_editor(
@@ -283,14 +321,19 @@ with st.sidebar:
     if st.button("💾 Salvar Alterações no Banco de Dados"):
         novo_mapa = {}
         for _, row in df_editado.iterrows():
-            cod = extrair_codigo_do_banco(row["Código Tributação"])
+            cod = extrair_codigo_do_banco(str(row["Código Tributação"]))
+            descricao = (
+                str(row["Descrição (Operação)"]).strip()
+                if pd.notna(row["Descrição (Operação)"])
+                else ""
+            )
             conta = (
                 str(row["Conta Débito"]).strip()
                 if pd.notna(row["Conta Débito"])
                 else ""
             )
             if cod:
-                novo_mapa[cod] = conta
+                novo_mapa[cod] = {"descricao": descricao, "conta": conta}
 
         salvar_banco_dados_github(novo_mapa)
         st.rerun()
@@ -621,7 +664,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
 
-        conta_debito_bd = mapa_contas.get(cod_trib, "2135")
+        conta_debito_bd = mapa_contas.get(cod_trib, {}).get("conta", "2135")
 
         desc_padrao = f"NF - {num_nota} {nome_empresa}".strip()
 
@@ -864,30 +907,34 @@ if (
             for cod in ausentes:
                 tipo_pdf = mapa_tipo_servico_pdf.get(cod)
                 if tipo_pdf:
-                    desc_exibida = f"{cod} - {tipo_pdf}"
+                    descricao_para_salvar = tipo_pdf
                     fonte = "extraída do PDF"
                 else:
-                    desc_exibida = obter_descricao_servico(cod)
+                    descricao_para_salvar = obter_descricao_servico(cod)
                     fonte = "tabela local (aproximada)"
 
                 st.markdown(f"### 📌 Código: `{cod}`")
-                st.info(f"📄 **Descrição {fonte}:** {desc_exibida}")
+                st.info(f"📄 **Descrição {fonte}:** {cod} - {descricao_para_salvar}")
 
                 nova_conta = st.text_input(
                     f"Informe a conta débito para o código {cod} (deixe em branco para usar 2135):",
                     key=f"input_{cod}",
                 )
-                novos_cadastros[cod] = nova_conta
+                novos_cadastros[cod] = {
+                    "descricao": descricao_para_salvar,
+                    "conta": nova_conta,
+                }
                 st.divider()
 
             salvar_btn = st.form_submit_button("💾 Confirmar e Processar")
 
         if salvar_btn:
-            for cod, conta in novos_cadastros.items():
-                if conta.strip():
-                    mapa_contas[cod] = conta.strip()
-                else:
-                    mapa_contas[cod] = "2135"
+            for cod, dados in novos_cadastros.items():
+                conta_informada = dados["conta"].strip()
+                mapa_contas[cod] = {
+                    "descricao": dados["descricao"],
+                    "conta": conta_informada if conta_informada else "2135",
+                }
 
             salvar_banco_dados_github(mapa_contas)
             st.session_state["codigos_ausentes"] = []
