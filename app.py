@@ -339,6 +339,9 @@ def extrair_nfse(caminho_pdf):
     with pdfplumber.open(caminho_pdf) as pdf:
         if len(pdf.pages) == 0:
             raise Exception("PDF sem páginas.")
+        
+        # Extrai todo o texto da página para verificar status especiais
+        texto_completo = (pdf.pages[0].extract_text() or "").upper()
         rows = extract_rows(pdf.pages[0])
 
     prestador_i = find_row_index(rows, "PRESTADOR / FORNECEDOR DA NFS-e")
@@ -387,8 +390,21 @@ def extrair_nfse(caminho_pdf):
         "ISS": iss,
     }
 
+    # VERIFICAÇÃO SE A NOTA É SUBSTITUÍDA OU CANCELADA
+    eh_substituida = (
+        "SUBSTITUÍDA" in texto_completo
+        or "SUBSTITUIDA" in texto_completo
+        or "NFS-E DE SUBSTITUIÇÃO GERADA" in texto_completo
+        or "CANCELADA" in texto_completo
+    )
+
     validacao = validar_retencoes(bruto, liquido, impostos)
     impostos_retidos = validacao["Impostos Retidos"]
+
+    if eh_substituida:
+        status_final = "SUBSTITUÍDA - IGNORADA"
+    else:
+        status_final = validacao["Status Validação"]
 
     if validacao["Combinações Encontradas"] == 1:
         pis_status = (
@@ -444,7 +460,7 @@ def extrair_nfse(caminho_pdf):
         "Valor Retenções Validadas": formatar_valor(
             validacao["Valor Retenções Validadas"]
         ),
-        "Status Validação": validacao["Status Validação"],
+        "Status Validação": status_final,
         "Combinações Encontradas": validacao["Combinações Encontradas"],
     }
 
@@ -456,6 +472,11 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
     linhas_alterdata = []
 
     for _, row in df_extrato.iterrows():
+        # IGNORA NOTAS SUBSTITUÍDAS OU CANCELADAS
+        status_validacao = str(row.get("Status Validação", "") or "").upper()
+        if "SUBSTITUÍDA" in status_validacao or "CANCELADA" in status_validacao:
+            continue
+
         num_nota = str(row.get("Número da NFS-e", "") or "").strip()
         data_comp = converter_data_obj(row.get("Data Competência", ""))
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
@@ -729,7 +750,6 @@ if (
             df_alterdata.to_excel(writer, index=False, sheet_name="Alterdata")
             df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
 
-            # Aplicação explícita da formatação de data na coluna A da aba Alterdata
             ws = writer.sheets["Alterdata"]
             for row in range(2, ws.max_row + 1):
                 cell = ws.cell(row=row, column=1)
