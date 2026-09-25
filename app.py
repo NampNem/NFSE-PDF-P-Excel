@@ -8,7 +8,6 @@ import shutil
 import tempfile
 import zipfile
 
-from duckduckgo_search import DDGS
 from github import Github
 import pandas as pd
 import pdfplumber
@@ -28,42 +27,135 @@ st.write(
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
 
-
 # ============================================================
-# FUNÇÃO DE PESQUISA NA INTERNET (DUCKDUCKGO)
+# TABELA EXPANDIDA LC 116 / ISS (MUNICIPAL E NACIONAL)
+# Usada apenas como ÚLTIMO fallback, quando não há texto do
+# próprio PDF nem cadastro no banco de dados para o código.
 # ============================================================
-def pesquisar_codigo_na_internet(codigo):
-    """Realiza uma busca em tempo real na web para descobrir a descrição do código de tributação."""
-    cod_limpo = re.sub(r"\D", "", str(codigo))
-    if not cod_limpo:
-        return "Código de tributação inválido ou não informado."
-
-    query = f'codigo tributacao "{cod_limpo}" LC 116 ISS servico'
-
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=2))
-            if results:
-                # Retorna o trecho/resumo da primeira busca encontrada
-                primeiro_resultado = results[0].get("body", "")
-                if primeiro_resultado:
-                    return primeiro_resultado
-    except Exception as e:
-        pass
-
-    return f"Não foi possível obter o resumo automático da web para o código {cod_limpo}. Consulte o plano de contas."
+TABELA_LC116 = {
+    # GRUPO 01 - INFORMÁTICA
+    "01": "Serviços de informática e congêneres",
+    "0101": "Análise e desenvolvimento de sistemas",
+    "0102": "Programação",
+    "0103": "Processamento, armazenamento ou hospedagem de dados, textos, imagens, vídeos, páginas web, aplicativos e sistemas de informação",
+    "0104": "Elaboração de programas de computadores, inclusive de jogos eletrônicos",
+    "0105": "Licenciamento ou cessão de direito de uso de programas de computação",
+    "0106": "Assessoria e consultoria em informática",
+    "0107": "Suporte técnico em informática, inclusive instalação, configuração e manutenção de programas de computação e bancos de dados",
+    "0108": "Configuração e manutenção de redes, de páginas e de esquemas de nutrição visual",
+    "0109": "Disponibilização de conteúdos de áudio, vídeo, imagem e texto por meio da internet",
+    # GRUPO 07 - ENGENHARIA / ARQUITETURA / CONSTRUÇÃO
+    "07": "Serviços relativos a engenharia, arquitetura, geologia, urbanismo, construção civil, manutenção, limpeza e meio ambiente",
+    "0701": "Engenharia, agronomia, agrimensura, arquitetura, geologia, urbanismo, paisagismo e congêneres",
+    "0702": "Execução, por administração, empreitada ou subempreitada, de obras de construção civil, hidráulica ou elétrica e de outras obras semelhantes",
+    "0703": "Elaboração de planos diretores, estudos de viabilidade, projetos e especificações técnicas",
+    "0704": "Demolição",
+    "0705": "Reparação, conservação e reforma de edifícios, estradas, pontes, portos e congêneres",
+    "0706": "Colocação e instalação de tapetes, carpetes, assoalhos, cortinas, revestimentos de parede, vidros, divisórias, placas de gesso e congêneres",
+    "0709": "Varrição, coleta, remoção, incineração, tratamento, reciclagem, separação e destinação final de lixo, rejeitos e outros resíduos",
+    "0710": "Limpeza, manutenção e conservação de vias e logradouros públicos, imóveis, chaminés, piscinas, parques e jardins",
+    "0711": "Decoração e jardinagem, inclusive corte e poda de árvores",
+    "0712": "Controle e eliminação de pragas urbanas, dedetização, desinfecção, desinsetização, imunização e desratização",
+    # GRUPO 10 - INTERMEDIAÇÃO / AGENCIAMENTO
+    "10": "Serviços de intermediação e congêneres",
+    "1001": "Agenciamento, corretagem ou intermediação de câmbio, de títulos e valores mobiliários",
+    "1002": "Agenciamento, corretagem ou intermediação de títulos em geral, valores mobiliários e contratos quaisquer",
+    "1003": "Agenciamento, corretagem ou intermediação de direitos de propriedade industrial, artística ou literária",
+    "1004": "Agenciamento, corretagem ou intermediação de contratos de arrendamento mercantil (leasing), de franquia (franchising) e de faturização (factoring)",
+    "1005": "Agenciamento, corretagem ou intermediação de bens móveis ou imóveis, não abrangidos em outros itens",
+    "1006": "Agenciamento de notícias",
+    "1007": "Agenciamento de publicidade e propaganda, inclusive o agenciamento de veiculação por quaisquer meios",
+    "1008": "Agenciamento de navegação marítima, fluvial ou lacustre",
+    "1009": "Agenciamento de transporte de carga",
+    # GRUPO 11 - GUARDA, VIGILÂNCIA E ARMAZENAMENTO
+    "11": "Serviços de guarda, estacionamento, armazenamento, vigilância e rasteio",
+    "1101": "Guarda e estacionamento de veículos automotores terrestres, de aeronaves e de embarcações",
+    "1102": "Vigilância, segurança ou monitoramento de bens, pessoas e semoventes",
+    "1104": "Armazenamento, depósito, carga, descarga, arrumação e guarda de bens de qualquer espécie",
+    # GRUPO 14 - MANUTENÇÃO E ASSISTÊNCIA TÉCNICA
+    "14": "Serviços relativos a bens de terceiros",
+    "1401": "Lubrificação, limpeza, lustração, revisão, carga e recarga, conserto, restauração, blindagem, manutenção e conservação de máquinas, veículos, aparelhos, equipamentos",
+    "1402": "Assistência técnica",
+    "1405": "Restauração, recondicionamento, acondicionamento, pintura, beneficiamento, lavagem, secagem, tingimento, galvanoplastia, anodização, corte, recorte, plastificação, costura e acabamento",
+    "1406": "Instalação e montagem de aparelhos, máquinas e equipamentos, inclusive montagem industrial",
+    # GRUPO 17 - CONSULTORIA, APOIO ADMINISTRATIVO E CONTABILIDADE
+    "17": "Serviços de apoio técnico, comercial, jurídico, contábil, administrativo e congêneres",
+    "1701": "Assessoria ou consultoria de qualquer natureza, não contida em outros itens",
+    "1702": "Perícias, laudos, exames técnicos e análises técnicas",
+    "1703": "Planejamento, organização e administração de feiras, exposições, congressos e congêneres",
+    "1704": "Recrutamento, agenciamento, seleção e colocação de mão de obra",
+    "1705": "Fornecimento de mão de obra, mesmo em caráter temporário, inclusive de empregados ou trabalhadores, avulsos ou temporários",
+    "1706": "Propaganda e publicidade, inclusive promoção de vendas, planejamento de campanhas ou sistemas de publicidade, elaboração de desenhos, textos e demais materiais publicitários",
+    "1712": "Adestramento, treinamento, ensino e avaliação de qualquer natureza",
+    "1714": "Advocacia",
+    "1719": "Contabilidade, inclusive serviços técnicos e auxiliares",
+    "1720": "Consultoria e assessoria econômica ou financeira",
+    "1725": "Inserção de textos, desenhos e outros materiais de propaganda e publicidade em qualquer meio (exceto em livros, jornais e periódicos)",
+    # GRUPO 24 - CHAVEIROS E SINALIZAÇÃO
+    "24": "Serviços de chaveiros, confecção de carimbos, placas, sinalização e congêneres",
+    "2401": "Serviços chaveiros, confecção de carimbos, placas, sinalização visual, banners, adesivos e congêneres",
+}
 
 
 # ============================================================
 # FUNÇÕES UTILITÁRIAS E AUXILIARES
 # ============================================================
 def tratar_codigo_tributacao(valor):
+    """Usado no valor extraído do PDF (campo 'CÓD. TRIBUTAÇÃO NACIONAL / MUNICIPAL'),
+    que costuma vir como 'NACIONAL / MUNICIPAL', ex: '170303 / 004'."""
     if valor is None:
         return ""
     texto = str(valor).strip()
     if "/" in texto:
         texto = texto.split("/", 1)[0]
     return texto.strip()
+
+
+def extrair_codigo_do_banco(valor):
+    """Usado ao ler o banco_de_dados.xlsx, onde a coluna A costuma vir como
+    'CÓDIGO - Descrição oficial completa...' (ex: '170303 - Planejamento...').
+    Extrai só o código numérico do início da string."""
+    if valor is None:
+        return ""
+    texto = str(valor).strip()
+    m = re.match(r"^(\d{2,8})\s*-\s*.+", texto)
+    if m:
+        return m.group(1)
+    # fallback: mantém compatibilidade com linhas que já eram só o código
+    return tratar_codigo_tributacao(texto)
+
+
+def obter_descricao_servico(codigo, tipo_servico_pdf=None):
+    """Retorna a descrição oficial do código de tributação.
+    Prioridade: 1) texto extraído do próprio PDF (o mais confiável, vem
+    direto da Receita/Sistema Nacional NFS-e) 2) tabela local reduzida."""
+    if tipo_servico_pdf:
+        return tipo_servico_pdf.strip()
+
+    # Limpa caracteres não numéricos
+    cod_limpo = re.sub(r"\D", "", str(codigo))
+
+    if not cod_limpo:
+        return "Código de tributação não informado"
+
+    # 1º Teste: Código exato com 4 dígitos (ex: 0702, 1701)
+    if len(cod_limpo) >= 4:
+        sub_cod4 = cod_limpo[:4]
+        if sub_cod4 in TABELA_LC116:
+            return TABELA_LC116[sub_cod4]
+
+    # 2º Teste: Grupo principal de 2 dígitos (ex: 07, 17, 10, 01)
+    if len(cod_limpo) >= 2:
+        sub_cod2 = cod_limpo[:2]
+        if sub_cod2 in TABELA_LC116:
+            return f"Grupo {sub_cod2}: {TABELA_LC116[sub_cod2]}"
+
+        # Tenta buscar qualquer serviço que comece com esses 2 dígitos
+        for k, v in TABELA_LC116.items():
+            if k.startswith(sub_cod2):
+                return f"Categoria {sub_cod2}: {v}"
+
+    return f"Código {codigo} (Consulte o plano de contas para definir o débito)"
 
 
 def converter_valor(valor):
@@ -120,7 +212,7 @@ def carregar_banco_dados_github():
                 df_bd = pd.read_excel(NOME_BANCO_DADOS, header=None)
 
             for _, r in df_bd.iterrows():
-                cod = tratar_codigo_tributacao(r[0])
+                cod = extrair_codigo_do_banco(r[0])
                 conta = str(r[1]).strip() if pd.notna(r[1]) else ""
                 if cod:
                     mapa_contas[cod] = conta
@@ -191,7 +283,7 @@ with st.sidebar:
     if st.button("💾 Salvar Alterações no Banco de Dados"):
         novo_mapa = {}
         for _, row in df_editado.iterrows():
-            cod = tratar_codigo_tributacao(row["Código Tributação"])
+            cod = extrair_codigo_do_banco(row["Código Tributação"])
             conta = (
                 str(row["Conta Débito"]).strip()
                 if pd.notna(row["Conta Débito"])
@@ -271,6 +363,32 @@ def find_value(rows, label, start=0, end=None):
                     if idx < len(next_row):
                         return next_row[idx].strip()
     return None
+
+
+def extrair_tipo_servico_pdf(rows):
+    """Extrai a frase que a própria NFS-e traz descrevendo o item de serviço
+    (ex: 'Organização administrativa ou congênere.'). Essa frase vem logo
+    acima do cabeçalho 'DESCRIÇÃO DO SERVIÇO', em uma linha de coluna única,
+    e é o texto oficial do Sistema Nacional da NFS-e para aquele código."""
+    idx_desc = find_row_index(rows, "DESCRIÇÃO DO SERVIÇO")
+    if idx_desc is None or idx_desc == 0:
+        return ""
+
+    linha_anterior = rows[idx_desc - 1]
+    if not linha_anterior:
+        return ""
+
+    # Essa linha normalmente aparece como uma única coluna de texto corrido.
+    # Se vier com mais de uma coluna, provavelmente é outra linha da tabela
+    # (ex: os valores de código/NBS/local), então ignoramos.
+    if len(linha_anterior) != 1:
+        return ""
+
+    texto = linha_anterior[0].strip()
+    if not texto or texto.upper() == "DESCRIÇÃO DO SERVIÇO":
+        return ""
+
+    return texto
 
 
 def validar_retencoes(bruto, liquido, impostos, tolerancia=0.02):
@@ -381,6 +499,9 @@ def extrair_nfse(caminho_pdf):
     )
     codigo_tributacao = tratar_codigo_tributacao(codigo_tributacao_original)
 
+    # Texto oficial do item de serviço, extraído diretamente do próprio PDF
+    tipo_servico_pdf = extrair_tipo_servico_pdf(rows)
+
     valor_servico = find_value(rows, "VALOR DO SERVIÇO")
     valor_pis = find_value(rows, "PIS - DÉBITO APURAÇÃO PRÓPRIA")
     valor_cofins = find_value(rows, "COFINS - DÉBITO APURAÇÃO PRÓPRIA")
@@ -456,6 +577,7 @@ def extrair_nfse(caminho_pdf):
         "Data Competência": data_competencia,
         "Nome da Empresa": nome_empresa,
         "Código Tributação": codigo_tributacao,
+        "Tipo de Serviço": tipo_servico_pdf,
         "Valor do Serviço": valor_servico,
         "Valor PIS": valor_pis,
         "PIS Retido?": pis_status,
@@ -704,6 +826,16 @@ if uploaded_files:
             df = pd.DataFrame(registros)
             st.session_state["df_extrato"] = df
 
+            # Mapa código -> texto do "Tipo de Serviço" extraído dos PDFs
+            # deste lote (fonte oficial: o próprio documento da NFS-e).
+            mapa_tipo_servico_pdf = {}
+            for _, row in df.iterrows():
+                cod = str(row.get("Código Tributação", "") or "").strip()
+                tipo = str(row.get("Tipo de Serviço", "") or "").strip()
+                if cod and tipo and cod not in mapa_tipo_servico_pdf:
+                    mapa_tipo_servico_pdf[cod] = tipo
+            st.session_state["mapa_tipo_servico_pdf"] = mapa_tipo_servico_pdf
+
             mapa_contas = carregar_banco_dados_github()
             codigos_na_nf = set(df["Código Tributação"].dropna().unique())
             ausentes = [c for c in codigos_na_nf if c and c not in mapa_contas]
@@ -720,6 +852,7 @@ if (
     mapa_contas = carregar_banco_dados_github()
     df = st.session_state["df_extrato"]
     ausentes = st.session_state.get("codigos_ausentes", [])
+    mapa_tipo_servico_pdf = st.session_state.get("mapa_tipo_servico_pdf", {})
 
     if ausentes:
         st.warning(
@@ -729,11 +862,16 @@ if (
         with st.form("form_novos_codigos"):
             novos_cadastros = {}
             for cod in ausentes:
-                with st.spinner(f"Pesquisando o código {cod} na web..."):
-                    desc_web = pesquisar_codigo_na_internet(cod)
+                tipo_pdf = mapa_tipo_servico_pdf.get(cod)
+                if tipo_pdf:
+                    desc_exibida = f"{cod} - {tipo_pdf}"
+                    fonte = "extraída do PDF"
+                else:
+                    desc_exibida = obter_descricao_servico(cod)
+                    fonte = "tabela local (aproximada)"
 
                 st.markdown(f"### 📌 Código: `{cod}`")
-                st.info(f"🌐 **Resultado da Consulta Web em tempo real:**\n\n{desc_web}")
+                st.info(f"📄 **Descrição {fonte}:** {desc_exibida}")
 
                 nova_conta = st.text_input(
                     f"Informe a conta débito para o código {cod} (deixe em branco para usar 2135):",
