@@ -26,6 +26,158 @@ st.write(
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
 
+# ============================================================
+# TABELA DE REFERÊNCIA OFICIAL (LC 116/2003 - ISS)
+# ============================================================
+TABELA_LC116 = {
+    "01": "Serviços de informática e congêneres",
+    "0101": "Análise e desenvolvimento de sistemas",
+    "0102": "Programação",
+    "0103": "Processamento de dados e congêneres",
+    "0104": "Elaboração de programas de computadores, inclusive de jogos",
+    "0105": "Licenciamento ou cessão de direito de uso de programas de computação",
+    "0106": "Assessoria e consultoria em informática",
+    "0107": "Suporte técnico em informática, inclusive instalação de programas",
+    "0108": "Hospedagem de dados e páginas eletrônicas",
+    "02": "Serviços de pesquisas e desenvolvimento de qualquer natureza",
+    "03": "Serviços prestados mediante locação, cessão de direito de uso e congêneres",
+    "04": "Serviços de saúde, assistência médica e congêneres",
+    "05": "Serviços de medicina veterinária e congêneres",
+    "06": "Serviços de cuidados pessoais, estética, atividades físicas e congêneres",
+    "07": "Serviços relativos a engenharia, arquitetura, geologia, urbanismo, construção civil, manutenção e limpeza",
+    "0701": "Engenharia, agronomia, arquitetura, geologia, urbanismo e paisagismo",
+    "0702": "Execução de obras de construção civil, hidráulica ou elétrica",
+    "0703": "Elaboração de planos diretores, estudos de viabilidade e projetos",
+    "0706": "Prospecção, perfuração, pesquisa e sondagem",
+    "0710": "Limpeza, manutenção e conservação de vias e logradouros públicos, imóveis e chaminés",
+    "0711": "Decoração e jardinagem, inclusive corte e poda de árvores",
+    "08": "Serviços de educação, ensino, orientação pedagógica e educacional, instrução, treinamento e avaliação",
+    "09": "Serviços relativos a hospedagem, turismo, viagens e congêneres",
+    "10": "Serviços de intermediação e congêneres",
+    "1001": "Agenciamento, corretagem ou intermediação de câmbio, de seguros e de planos de previdência",
+    "1002": "Agenciamento, corretagem ou intermediação de títulos em geral, de valores mobiliários e mercadorias",
+    "1005": "Agenciamento, corretagem ou intermediação de bens móveis ou imóveis",
+    "11": "Serviços de guarda, estacionamento, armazenamento, vigilância e rasteio",
+    "1101": "Guarda e estacionamento de veículos automotores terrestres",
+    "1102": "Vigilância, segurança ou monitoramento de bens, pessoas e semoventes",
+    "1104": "Armazenamento, depósito, carga, descarga, arrumação e guarda de bens",
+    "12": "Serviços de diversões, lazer, entretenimento e congêneres",
+    "13": "Serviços relativos a fonografia, fotografia, cinematografia e reprografia",
+    "14": "Serviços relativos a bens de terceiros (Manutenção, Reparo, Montagem)",
+    "1401": "Lubrificação, limpeza, revisão, carga e recarga, conserto, restauração e manutenção de máquinas e veículos",
+    "1402": "Assistência técnica",
+    "1406": "Instalação e montagem de aparelhos, máquinas e equipamentos",
+    "15": "Serviços relacionados ao setor bancário ou financeiro",
+    "16": "Serviços de transporte de natureza municipal",
+    "17": "Serviços de apoio técnico, comercial, jurídico, contábil, administrativo e congêneres",
+    "1701": "Assessoria ou consultoria de qualquer natureza, não contida em outros itens",
+    "1702": "Datilografia, digitação, estenografia, expediente, secretaria, redação e apoio administrativo",
+    "1703": "Planejamento, organização e administração de feiras, exposições e congressos",
+    "1704": "Recrutamento, agenciamento, seleção e colocação de mão de obra",
+    "1705": "Fornecimento de mão de obra, mesmo em caráter temporário",
+    "1706": "Propaganda e publicidade, inclusive promoção de vendas",
+    "1712": "Serviços contábeis, de auditoria, guarda-livros, atuária e consultoria fiscal",
+    "1714": "Advocacia",
+    "1719": "Consultoria e assessoria financeira",
+    "18": "Serviços de regulação de sinistros vinculados a contratos de seguros",
+    "19": "Serviços de distribuição e venda de bilhetes e demais produtos de loteria",
+    "20": "Serviços portuários, aeroportuários, de terminais rodoviários, ferroviários e metroviários",
+    "21": "Serviços de registros públicos, cartorários e notariais",
+    "22": "Serviços de explA **Opção 2** é a escolha mais eficiente e precisa para o ambiente contábil. Cruzar os códigos extraídos com a **Tabela Oficial da Lei Complementar 116 (LC 116)** garante que você veja a descrição exata do serviço direto na tela, sem depender de pesquisas externas que podem falhar ou trazer informações incorretas.
+
+---
+
+### Como vai funcionar na tela do Streamlit:
+
+Quando o sistema encontrar um código de tributação que ainda não tem conta de débito vinculada no seu banco de dados, ele exibirá:
+
+> 📌 **Código de Tributação:** `1703`
+> 
+> 📄 **Descrição Oficial (LC 116):** *Elaboração de programas de computadores, inclusive de jogos eletrônicos...*
+> 
+> ✏️ **Informe a conta débito para o código 1703:** `[ Caixa de Texto ]`
+
+---
+
+### Passo 1: Atualizar o arquivo `app.py` no GitHub
+
+Substitua todo o conteúdo do seu arquivo **`app.py`** pelo código abaixo. Ele já contém um dicionário interno padronizado com os principais códigos da LC 116 para fazer a busca automática da descrição do serviço:
+
+```python
+from collections import defaultdict
+import io
+import itertools
+import os
+import re
+import shutil
+import tempfile
+import zipfile
+
+from github import Github
+import pandas as pd
+import pdfplumber
+import streamlit as st
+
+# ============================================================
+# CONFIGURAÇÃO DA PÁGINA
+# ============================================================
+st.set_page_config(
+    page_title="Extrator de NFS-e", page_icon="📄", layout="wide"
+)
+
+st.title("📄 Extrator de NFS-e e Gerador Alterdata")
+st.write(
+    "Faça o upload dos arquivos **PDF** de NFS-e ou de arquivos **ZIP** contendo os PDFs para processar."
+)
+
+NOME_BANCO_DADOS = "banco_de_dados.xlsx"
+
+# ============================================================
+# TABELA OFICIAL LC 116 (DESCRIÇÃO DOS SERVIÇOS)
+# ============================================================
+TABELA_LC116 = {
+    "0101": "Análise e desenvolvimento de sistemas",
+    "0102": "Programação",
+    "0103": "Processamento, armazenamento ou hospedagem de dados, textos, imagens, vídeos, páginas web, aplicativos e sistemas de informação",
+    "0104": "Elaboração de programas de computadores, inclusive de jogos eletrônicos",
+    "0105": "Licenciamento ou cessão de direito de uso de programas de computação",
+    "0106": "Assessoria e consultoria em informática",
+    "0107": "Suporte técnico em informática, inclusive instalação, configuração e manutenção de programas de computação e bancos de dados",
+    "0108": "Configuração e manutenção de redes, de páginas e de esquemas de nutrição visual",
+    "0109": "Disponibilização de conteúdos de áudio, vídeo, imagem e texto por meio da internet",
+    "0701": "Engenharia, agronomia, agrimensura, arquitetura, geologia, urbanismo, paisagismo e congêneres",
+    "0702": "Execução, por administração, empreitada ou subempreitada, de obras de construção civil, hidráulica ou elétrica",
+    "0703": "Elaboração de planos diretores, estudos de viabilidade, projetos e especificações técnicas",
+    "1001": "Agenciamento, corretagem ou intermediação de câmbio, de títulos e valores mobiliários",
+    "1002": "Agenciamento, corretagem ou intermediação de títulos em geral, valores mobiliários e contratos quaisquer",
+    "1005": "Agenciamento, corretagem ou intermediação de bens móveis ou imóveis",
+    "1401": "Lubrificação, limpeza, lustração, revisão, carga e recarga, conserto, restauração, blindagem, manutenção e conservação de máquinas, veículos, aparelhos, equipamentos",
+    "1701": "Assessoria ou consultoria de qualquer natureza",
+    "1702": "Perícias, laudos, exames técnicos e análises técnicas",
+    "1703": "Planejamento, organização e administração de feiras, exposições, congressos e congêneres",
+    "1704": "Recrutamento, agenciamento, seleção e colocação de mão de obra",
+    "1705": "Fornecimento de mão de obra, mesmo em caráter temporário",
+    "1706": "Propaganda e publicidade, inclusive promoção de vendas, planejamento de campanhas",
+    "1712": "Adestramento, treinamento, ensino e avaliação de qualquer natureza",
+    "1719": "Contabilidade, inclusive serviços técnicos e auxiliares",
+    "1720": "Consultoria e assessoria econômica ou financeira",
+    "2401": "Serviços chaveiros, confecção de carimbos, placas, sinalização visual, banners, adesivos e congêneres",
+}
+
+
+def obter_descricao_servico(codigo):
+    cod_limpo = re.sub(r"\D", "", str(codigo))
+    if len(cod_limpo) >= 4:
+        sub_cod = cod_limpo[:4]
+        if sub_cod in TABELA_LC116:
+            return TABELA_LC116[sub_cod]
+    elif len(cod_limpo) >= 2:
+        sub_cod = cod_limpo[:2]
+        for k, v in TABELA_LC116.items():
+            if k.startswith(sub_cod):
+                return v
+    return "Descrição de serviço não localizada na tabela resumida LC 116"
+
 
 # ============================================================
 # GERENCIAMENTO DO BANCO DE DADOS (GITHUB)
@@ -50,11 +202,9 @@ def carregar_banco_dados_github():
 
 
 def salvar_banco_dados_github(mapa_contas):
-    # Gera o Excel atualizado na memória
     df_bd = pd.DataFrame(list(mapa_contas.items()))
     df_bd.to_excel(NOME_BANCO_DADOS, index=False, header=False)
 
-    # Tenta salvar via API do GitHub se o Token estiver configurado
     try:
         token = st.secrets.get("GITHUB_TOKEN")
         repo_name = st.secrets.get("REPO_NAME")
@@ -80,12 +230,10 @@ def salvar_banco_dados_github(mapa_contas):
                     "Criando banco de dados de contas tributárias",
                     novo_conteudo,
                 )
-            st.success(
-                "Novo código de tributação salvo permanentemente no GitHub!"
-            )
+            st.success("Novos códigos salvos permanentemente no GitHub!")
         else:
             st.warning(
-                "Novo código salvo apenas na sessão atual (Configure o GITHUB_TOKEN nos Secrets do Streamlit para salvar permanentemente no GitHub)."
+                "Salvo apenas na sessão atual (Configure o GITHUB_TOKEN nos Secrets para salvar no GitHub)."
             )
     except Exception as e:
         st.error(f"Erro ao salvar no GitHub: {e}")
@@ -408,7 +556,6 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
 
-        # Busca a conta no mapa. Se não encontrar, usa 2135 como padrão
         conta_debito_bd = mapa_contas.get(cod_trib, "2135")
 
         desc_padrao = f"NF - {num_nota} {nome_empresa}".strip()
@@ -432,7 +579,6 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
         except:
             comb_encontradas = 0
 
-        # CASO 1: Lançamento Simples
         if comb_encontradas == 0:
             linhas_alterdata.append({
                 "Data": data_comp,
@@ -444,7 +590,6 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                 "descrição": desc_padrao,
             })
         else:
-            # CASO 2: Lançamento Múltiplo
             linhas_alterdata.append({
                 "Data": data_comp,
                 "debito": conta_debito_bd,
@@ -550,12 +695,6 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 # INTERFACE STREAMLIT
 # ============================================================
 
-# Controle de estado da sessão
-if "df_extrato" not in st.session_state:
-    st.session_state.df_extrato = None
-if "codigos_ausentes" not in st.session_state:
-    st.session_state.codigos_ausentes = []
-
 uploaded_files = st.file_uploader(
     "Arraste ou selecione os arquivos PDF ou ZIP aqui",
     type=["pdf", "zip"],
@@ -603,47 +742,65 @@ if uploaded_files:
 
         if pdfs_para_processar:
             registros = []
-            for caminho_pdf in pdfs_para_processar:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for i, caminho_pdf in enumerate(pdfs_para_processar):
+                nome_pdf = os.path.basename(caminho_pdf)
+                status_text.text(
+                    f"Processando [{i+1}/{len(pdfs_para_processar)}]: {nome_pdf}"
+                )
                 try:
                     registros.append(extrair_nfse(caminho_pdf))
                 except:
                     pass
+                progress_bar.progress((i + 1) / len(pdfs_para_processar))
+
+            status_text.text("Extração concluída!")
 
             df = pd.DataFrame(registros)
-            st.session_state.df_extrato = df
+            st.session_state["df_extrato"] = df
 
-            # Carrega mapa de contas e verifica se há códigos novos
             mapa_contas = carregar_banco_dados_github()
             codigos_na_nf = set(df["Código Tributação"].dropna().unique())
-
             ausentes = [c for c in codigos_na_nf if c and c not in mapa_contas]
-            st.session_state.codigos_ausentes = ausentes
+
+            st.session_state["codigos_ausentes"] = ausentes
 
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# TELA DE CADASTRO DE NOVOS CÓDIGOS TRIBUTÁRIOS
-if st.session_state.df_extrato is not None:
+# EXIBIÇÃO DE RESULTADOS E MAPPING DE CÓDIGOS
+if (
+    "df_extrato" in st.session_state
+    and st.session_state["df_extrato"] is not None
+):
     mapa_contas = carregar_banco_dados_github()
+    df = st.session_state["df_extrato"]
+    ausentes = st.session_state.get("codigos_ausentes", [])
 
-    if st.session_state.codigos_ausentes:
+    if ausentes:
         st.warning(
             "⚠️ Foram encontrados Códigos de Tributação não cadastrados no Banco de Dados!"
         )
 
-        novos_cadastros = {}
         with st.form("form_novos_codigos"):
-            for cod in st.session_state.codigos_ausentes:
-                st.write(f"📌 **Código de Tributação:** `{cod}`")
+            novos_cadastros = {}
+            for cod in ausentes:
+                desc_lc116 = obter_descricao_servico(cod)
+
+                st.markdown(f"### 📌 Código: `{cod}`")
+                st.info(f"📄 **Descrição Oficial (LC 116):** {desc_lc116}")
+
                 nova_conta = st.text_input(
-                    f"Informe a conta débito para o código {cod}:", key=f"input_{cod}"
+                    f"Informe a conta débito para o código {cod} (deixe em branco para usar 2135):",
+                    key=f"input_{cod}",
                 )
                 novos_cadastros[cod] = nova_conta
+                st.divider()
 
-            col_sub, col_skip = st.columns(2)
-            btn_salvar = col_sub.form_submit_button("💾 Salvar Novos Códigos")
-            btn_pular = col_skip.form_submit_button("⏭️ Pular (Usar 2135 Padrão)")
+            salvar_btn = st.form_submit_button("💾 Confirmar e Processar")
 
-        if btn_salvar:
+        if salvar_btn:
             for cod, conta in novos_cadastros.items():
                 if conta.strip():
                     mapa_contas[cod] = conta.strip()
@@ -651,32 +808,19 @@ if st.session_state.df_extrato is not None:
                     mapa_contas[cod] = "2135"
 
             salvar_banco_dados_github(mapa_contas)
-            st.session_state.codigos_ausentes = []
-            st.rerun()
+            st.session_state["codigos_ausentes"] = []
+            st.success("Contas atualizadas com sucesso!")
 
-        if btn_pular:
-            for cod in st.session_state.codigos_ausentes:
-                mapa_contas[cod] = "2135"
-            st.session_state.codigos_ausentes = []
-            st.rerun()
-
-    else:
-        # GERAR PLANILHA FINAL ALTERDATA
-        df_alterdata = gerar_aba_alterdata(
-            st.session_state.df_extrato, mapa_contas
-        )
+    if not st.session_state.get("codigos_ausentes"):
+        df_alterdata = gerar_aba_alterdata(df, mapa_contas)
 
         st.subheader("📊 Prévia - Aba Alterdata")
         st.dataframe(df_alterdata, use_container_width=True)
 
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            df_alterdata.to_excel(
-                writer, index=False, sheet_name="Alterdata"
-            )
-            st.session_state.df_extrato.to_excel(
-                writer, index=False, sheet_name="NFS-e Extraídas"
-            )
+            df_alterdata.to_excel(writer, index=False, sheet_name="Alterdata")
+            df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
 
         st.download_button(
             label="📥 Baixar Planilha para Importação Alterdata (.xlsx)",
