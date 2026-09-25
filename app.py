@@ -1,4 +1,5 @@
 from collections import defaultdict
+import datetime
 import io
 import itertools
 import os
@@ -7,7 +8,7 @@ import shutil
 import tempfile
 import zipfile
 
-from github import Github
+ me import Github
 import pandas as pd
 import pdfplumber
 import streamlit as st
@@ -242,14 +243,14 @@ def tratar_codigo_tributacao(valor):
     return texto.strip()
 
 
-def formatar_data_br(data_str):
+def converter_data_obj(data_str):
     if not data_str:
-        return ""
+        return None
     try:
         dt = pd.to_datetime(data_str, dayfirst=True)
-        return dt.strftime("%d/%m/%Y")
+        return dt.date()
     except:
-        return str(data_str).strip()
+        return None
 
 
 def validar_retencoes(bruto, liquido, impostos, tolerancia=0.02):
@@ -456,7 +457,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 
     for _, row in df_extrato.iterrows():
         num_nota = str(row.get("Número da NFS-e", "") or "").strip()
-        data_comp = formatar_data_br(row.get("Data Competência", ""))
+        data_comp = converter_data_obj(row.get("Data Competência", ""))
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
 
@@ -592,10 +593,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                 "descrição": desc_padrao,
             })
 
-    df_alt = pd.DataFrame(linhas_alterdata)
-    # Garante que a coluna Data permaneça como texto string sem conversão nativa
-    df_alt["Data"] = df_alt["Data"].astype(str)
-    return df_alt
+    return pd.DataFrame(linhas_alterdata)
 
 
 # ============================================================
@@ -725,10 +723,17 @@ if (
         st.dataframe(df_alterdata, use_container_width=True)
 
         buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            # Exporta a coluna Data como texto literal
+        with pd.ExcelWriter(
+            buffer, engine="openpyxl", date_format="dd/mm/yyyy"
+        ) as writer:
             df_alterdata.to_excel(writer, index=False, sheet_name="Alterdata")
             df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+
+            # Aplicação explícita da formatação de data na coluna A da aba Alterdata
+            ws = writer.sheets["Alterdata"]
+            for row in range(2, ws.max_row + 1):
+                cell = ws.cell(row=row, column=1)
+                cell.number_format = "dd/mm/yyyy"
 
         st.download_button(
             label="📥 Baixar Planilha para Importação Alterdata (.xlsx)",
