@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import zipfile
 
- me import Github
+from github import Github
 import pandas as pd
 import pdfplumber
 import streamlit as st
