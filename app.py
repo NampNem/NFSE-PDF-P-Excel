@@ -60,6 +60,18 @@ TABELA_LC116 = {
 }
 
 
+# ============================================================
+# FUNÇÕES UTILITÁRIAS E AUXILIARES (DECLARADAS PRIMEIRO)
+# ============================================================
+def tratar_codigo_tributacao(valor):
+    if valor is None:
+        return ""
+    texto = str(valor).strip()
+    if "/" in texto:
+        texto = texto.split("/", 1)[0]
+    return texto.strip()
+
+
 def obter_descricao_servico(codigo):
     cod_limpo = re.sub(r"\D", "", str(codigo))
     if len(cod_limpo) >= 4:
@@ -72,6 +84,47 @@ def obter_descricao_servico(codigo):
             if k.startswith(sub_cod):
                 return v
     return "Descrição de serviço não localizada na tabela resumida LC 116"
+
+
+def converter_valor(valor):
+    if valor is None:
+        return None
+    texto = str(valor).strip()
+    if texto == "":
+        return None
+    texto = texto.upper().replace("R$", "").replace(" ", "")
+
+    if texto in ["-", "—", "", "N/A", "NA"]:
+        return None
+
+    texto = re.sub(r"[^0-9,\.\-]", "", texto)
+    if not texto:
+        return None
+
+    try:
+        if "," in texto:
+            texto = texto.replace(".", "").replace(",", ".")
+        return float(texto)
+    except:
+        return None
+
+
+def formatar_valor(valor):
+    if valor is None:
+        return ""
+    return (
+        f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    )
+
+
+def converter_data_obj(data_str):
+    if not data_str:
+        return None
+    try:
+        dt = pd.to_datetime(data_str, dayfirst=True)
+        return dt.date()
+    except:
+        return None
 
 
 # ============================================================
@@ -148,7 +201,6 @@ with st.sidebar:
         list(mapa_atual.items()), columns=["Código Tributação", "Conta Débito"]
     )
 
-    # Tabela editável diretamente na tela
     df_editado = st.data_editor(
         df_gerenciador,
         num_rows="dynamic",
@@ -160,7 +212,11 @@ with st.sidebar:
         novo_mapa = {}
         for _, row in df_editado.iterrows():
             cod = tratar_codigo_tributacao(row["Código Tributação"])
-            conta = str(row["Conta Débito"]).strip() if pd.notna(row["Conta Débito"]) else ""
+            conta = (
+                str(row["Conta Débito"]).strip()
+                if pd.notna(row["Conta Débito"])
+                else ""
+            )
             if cod:
                 novo_mapa[cod] = conta
 
@@ -169,7 +225,7 @@ with st.sidebar:
 
 
 # ============================================================
-# TRATAMENTOS E EXTRATOR
+# TRATAMENTOS E EXTRATOR DE PDF
 # ============================================================
 def extract_rows(page, gap_threshold=10):
     words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
@@ -235,56 +291,6 @@ def find_value(rows, label, start=0, end=None):
                     if idx < len(next_row):
                         return next_row[idx].strip()
     return None
-
-
-def converter_valor(valor):
-    if valor is None:
-        return None
-    texto = str(valor).strip()
-    if texto == "":
-        return None
-    texto = texto.upper().replace("R$", "").replace(" ", "")
-
-    if texto in ["-", "—", "", "N/A", "NA"]:
-        return None
-
-    texto = re.sub(r"[^0-9,\.\-]", "", texto)
-    if not texto:
-        return None
-
-    try:
-        if "," in texto:
-            texto = texto.replace(".", "").replace(",", ".")
-        return float(texto)
-    except:
-        return None
-
-
-def formatar_valor(valor):
-    if valor is None:
-        return ""
-    return (
-        f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    )
-
-
-def tratar_codigo_tributacao(valor):
-    if valor is None:
-        return ""
-    texto = str(valor).strip()
-    if "/" in texto:
-        texto = texto.split("/", 1)[0]
-    return texto.strip()
-
-
-def converter_data_obj(data_str):
-    if not data_str:
-        return None
-    try:
-        dt = pd.to_datetime(data_str, dayfirst=True)
-        return dt.date()
-    except:
-        return None
 
 
 def validar_retencoes(bruto, liquido, impostos, tolerancia=0.02):
@@ -649,7 +655,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 
 
 # ============================================================
-# INTERFACE STREAMLIT
+# INTERFACE STREAMLIT PRINCIPAL
 # ============================================================
 
 uploaded_files = st.file_uploader(
