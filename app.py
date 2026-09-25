@@ -242,6 +242,16 @@ def tratar_codigo_tributacao(valor):
     return texto.strip()
 
 
+def formatar_data_br(data_str):
+    if not data_str:
+        return ""
+    try:
+        dt = pd.to_datetime(data_str, dayfirst=True)
+        return dt.strftime("%d/%m/%Y")
+    except:
+        return str(data_str).strip()
+
+
 def validar_retencoes(bruto, liquido, impostos, tolerancia=0.02):
     resultado = {
         "Diferença Bruto-Líquido": None,
@@ -446,7 +456,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 
     for _, row in df_extrato.iterrows():
         num_nota = str(row.get("Número da NFS-e", "") or "").strip()
-        data_comp = row.get("Data Competência", "")
+        data_comp = formatar_data_br(row.get("Data Competência", ""))
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
 
@@ -582,7 +592,10 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                 "descrição": desc_padrao,
             })
 
-    return pd.DataFrame(linhas_alterdata)
+    df_alt = pd.DataFrame(linhas_alterdata)
+    # Garante que a coluna Data permaneça como texto string sem conversão nativa
+    df_alt["Data"] = df_alt["Data"].astype(str)
+    return df_alt
 
 
 # ============================================================
@@ -713,6 +726,7 @@ if (
 
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            # Exporta a coluna Data como texto literal
             df_alterdata.to_excel(writer, index=False, sheet_name="Alterdata")
             df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
 
