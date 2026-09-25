@@ -125,13 +125,47 @@ def salvar_banco_dados_github(mapa_contas):
                     "Criando banco de dados de contas tributárias",
                     novo_conteudo,
                 )
-            st.success("Novos códigos salvos permanentemente no GitHub!")
+            st.success("Banco de dados salvo permanentemente no GitHub!")
         else:
             st.warning(
                 "Salvo apenas na sessão atual (Configure o GITHUB_TOKEN nos Secrets para salvar no GitHub)."
             )
     except Exception as e:
         st.error(f"Erro ao salvar no GitHub: {e}")
+
+
+# ============================================================
+# GERENCIADOR NA BARRA LATERAL (SIDEBAR)
+# ============================================================
+with st.sidebar:
+    st.header("⚙️ Gerenciar Banco de Dados")
+    st.write(
+        "Modifique, adicione ou remova códigos de tributação e suas contas contábeis vinculadas."
+    )
+
+    mapa_atual = carregar_banco_dados_github()
+    df_gerenciador = pd.DataFrame(
+        list(mapa_atual.items()), columns=["Código Tributação", "Conta Débito"]
+    )
+
+    # Tabela editável diretamente na tela
+    df_editado = st.data_editor(
+        df_gerenciador,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="editor_bd",
+    )
+
+    if st.button("💾 Salvar Alterações no Banco de Dados"):
+        novo_mapa = {}
+        for _, row in df_editado.iterrows():
+            cod = tratar_codigo_tributacao(row["Código Tributação"])
+            conta = str(row["Conta Débito"]).strip() if pd.notna(row["Conta Débito"]) else ""
+            if cod:
+                novo_mapa[cod] = conta
+
+        salvar_banco_dados_github(novo_mapa)
+        st.rerun()
 
 
 # ============================================================
@@ -339,8 +373,7 @@ def extrair_nfse(caminho_pdf):
     with pdfplumber.open(caminho_pdf) as pdf:
         if len(pdf.pages) == 0:
             raise Exception("PDF sem páginas.")
-        
-        # Extrai todo o texto da página para verificar status especiais
+
         texto_completo = (pdf.pages[0].extract_text() or "").upper()
         rows = extract_rows(pdf.pages[0])
 
@@ -390,7 +423,6 @@ def extrair_nfse(caminho_pdf):
         "ISS": iss,
     }
 
-    # VERIFICAÇÃO SE A NOTA É SUBSTITUÍDA OU CANCELADA
     eh_substituida = (
         "SUBSTITUÍDA" in texto_completo
         or "SUBSTITUIDA" in texto_completo
@@ -472,7 +504,6 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
     linhas_alterdata = []
 
     for _, row in df_extrato.iterrows():
-        # IGNORA NOTAS SUBSTITUÍDAS OU CANCELADAS
         status_validacao = str(row.get("Status Validação", "") or "").upper()
         if "SUBSTITUÍDA" in status_validacao or "CANCELADA" in status_validacao:
             continue
