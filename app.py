@@ -1,5 +1,3 @@
-from collections import defaultdict
-import datetime
 import io
 import os
 import re
@@ -21,7 +19,7 @@ st.set_page_config(
 
 st.title("📄 Extrator de NFS-e (XML) e Gerador Alterdata")
 st.write(
-    "Faça o upload dos arquivos **XML** de NFS-e ou de arquivos **ZIP** contendo os XMLs para processar."
+    "Faça o upload dos arquivos **XML** (NFS-e ou Eventos de Cancelamento) ou de arquivos **ZIP** contendo os XMLs."
 )
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
@@ -201,10 +199,10 @@ with st.sidebar:
 
 
 # ============================================================
-# PARSER EXTRATOR DE XML
+# PARSER EXTRATOR DE XML (NFS-E E EVENTOS)
 # ============================================================
-def extrair_nfse_xml(caminho_ou_conteudo):
-    """Extrai os dados de tributação e serviço diretamente das tags do XML."""
+def extrair_xml(caminho_ou_conteudo):
+    """Identifica se o XML é uma NFS-e ou um Evento de Cancelamento/Substituição."""
     if isinstance(caminho_ou_conteudo, bytes):
         root = ET.fromstring(caminho_ou_conteudo)
     elif isinstance(caminho_ou_conteudo, str) and caminho_ou_conteudo.endswith(".xml"):
@@ -232,31 +230,47 @@ def extrair_nfse_xml(caminho_ou_conteudo):
         except ValueError:
             return default
 
-    # Dados da Nota
+    # VERIFICAÇÃO: EVENTO DE CANCELAMENTO / SUBSTITUIÇÃO
+    if root.tag.endswith("evento") or find_tag(root, "pedRegEvento") is not None:
+        ch_nfse_original = get_text(root, "chNFSe")
+        ch_substituta = get_text(root, "chSubstituta")
+        desc_evento = get_text(root, "xDesc")
+        motivo_subst = get_text(root, "xMotivo")
+        data_evento = get_text(root, "dhEvento")
+
+        return {
+            "tipo_xml": "EVENTO",
+            "Chave NFS-e Original": ch_nfse_original,
+            "Chave NFS-e Substituta": ch_substituta,
+            "Descrição Evento": desc_evento,
+            "Motivo Cancelamento": motivo_subst,
+            "Data Evento": data_evento,
+        }
+
+    # NFS-E NORMAL
+    inf_nfse_node = find_tag(root, "infNFSe")
+    chave_nfse = inf_nfse_node.attrib.get("Id", "") if inf_nfse_node is not None else ""
+    if chave_nfse.startswith("NFS"):
+        chave_nfse = chave_nfse[3:]
+
     numero_nfse = get_text(root, "nNFSe")
     data_competencia = get_text(root, "dCompet")
 
-    # Prestador
     emit_node = find_tag(root, "emit")
     nome_empresa = get_text(emit_node, "xNome") if emit_node is not None else ""
 
-    # Código exato do XML (ex: 100801, 100501, 130401) sem cortes
     codigo_tributacao = get_text(root, "cTribNac")
-
-    # Descrição exata extraída do XML
     tipo_servico = (
         get_text(root, "xTribNac")
         or get_text(root, "xTribMun")
         or get_text(root, "xDescServ")
     )
 
-    # Valores Financeiros
     v_serv = get_float(root, "vServ")
     v_liq = get_float(root, "vLiq")
     if v_liq == 0.0 and v_serv > 0.0:
         v_liq = v_serv
 
-    # Impostos e Retenções
     v_pis = get_float(root, "vPis")
     v_cofins = get_float(root, "vCofins")
     v_csll = get_float(root, "vCSLL")
@@ -264,19 +278,34 @@ def extrair_nfse_xml(caminho_ou_conteudo):
     v_inss = get_float(root, "vINSS")
     v_iss = get_float(root, "vISSQN")
 
-    # Status de Retenção
     tp_ret_iss = get_text(root, "tpRetISSQN")
-    iss_retido_flag = "RETIDO" if tp_ret_iss == "2" else "NÃO RETIDO"
+    iss_retido_flag = "Com Retenção" if tp_ret_iss == "2" else "Sem Retenção"
 
-    pis_status = "RETIDO" if v_pis > 0 else "NÃO RETIDO"
-    cofins_status = "RETIDO" if v_cofins > 0 else "NÃO RETIDO"
-    csll_status = "RETIDO" if v_csll > 0 else "NÃO RETIDO"
-    irrf_status = "RETIDO" if v_irrf > 0 else "NÃO RETIDO"
-    inss_status = "RETIDO" if v_inss > 0 else "NÃO RETIDO"
+    # Monta lista amigável de impostos retidos na nota
+    impostos_retidos_lista = []
+    if v_pis > 0:
+        impostos_retidos_lista.append("PIS")
+    if v_cofins > 0:
+        impostos_retidos_lista.append("COFINS")
+    if v_csll > 0:
+        impostos_retidos_lista.append("CSLL")
+    if v_irrf > 0:
+        impostos_retidos_lista.append("IRRF")
+    if v_inss > 0:
+        impostos_retidos_lista.append("INSS")
+    if tp_ret_iss == "2":
+        impostos_retidos_lista.append("ISS")
+
+    if impostos_retidos_lista:
+        texto_retenções = "Retenção " + "/".join(impostos_retidos_lista)
+    else:
+        texto_retenções = "Sem Retenção"
 
     diferenca = round(v_serv - v_liq, 2)
 
     return {
+        "tipo_xml": "NFSE",
+        "Chave NFS-e": chave_nfse,
         "Número da NFS-e": numero_nfse,
         "Data Competência": data_competencia,
         "Nome da Empresa": nome_empresa,
@@ -284,23 +313,23 @@ def extrair_nfse_xml(caminho_ou_conteudo):
         "Tipo de Serviço": tipo_servico,
         "Valor do Serviço": v_serv,
         "Valor PIS": v_pis,
-        "PIS Retido?": pis_status,
+        "PIS Retido?": "Com Retenção" if v_pis > 0 else "Sem Retenção",
         "Valor COFINS": v_cofins,
-        "COFINS Retido?": cofins_status,
+        "COFINS Retido?": "Com Retenção" if v_cofins > 0 else "Sem Retenção",
         "CSLL (Retida)": v_csll,
-        "CSLL Retida?": csll_status,
+        "CSLL Retida?": "Com Retenção" if v_csll > 0 else "Sem Retenção",
         "IRRF": v_irrf,
-        "IRRF Retido?": irrf_status,
+        "IRRF Retido?": "Com Retenção" if v_irrf > 0 else "Sem Retenção",
         "INSS (Previdenciária)": v_inss,
-        "INSS Retido?": inss_status,
+        "INSS Retido?": "Com Retenção" if v_inss > 0 else "Sem Retenção",
         "ISS": v_iss,
-        "ISS Retenção": v_iss if iss_retido_flag == "RETIDO" else 0.0,
+        "ISS Retenção": v_iss if iss_retido_flag == "Com Retenção" else 0.0,
         "ISS Retido?": iss_retido_flag,
         "Valor Líquido": v_liq,
         "Diferença Bruto-Líquido": formatar_valor(diferenca),
-        "Retenções Validadas": "VALIDAÇÃO XML OK",
-        "Valor Retenções Validadas": formatar_valor(diferenca),
-        "Status Validação": "VALIDADO - FECHAMENTO EXATO",
+        "Retenções Identificadas": texto_retenções,
+        "Valor Total Retenções": formatar_valor(diferenca),
+        "Status Validação": "OK",
         "Combinações Encontradas": 1,
     }
 
@@ -312,10 +341,6 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
     linhas_alterdata = []
 
     for _, row in df_extrato.iterrows():
-        status_validacao = str(row.get("Status Validação", "") or "").upper()
-        if "SUBSTITUÍDA" in status_validacao or "CANCELADA" in status_validacao:
-            continue
-
         num_nota = str(row.get("Número da NFS-e", "") or "").strip()
         data_comp = converter_data_obj(row.get("Data Competência", ""))
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
@@ -359,13 +384,13 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 
             soma_pcc = 0.0
             pcc_retidos = []
-            if str(row.get("PIS Retido?", "")).strip().upper() == "RETIDO":
+            if str(row.get("PIS Retido?", "")).strip().upper() == "COM RETENÇÃO":
                 soma_pcc += val_pis
                 pcc_retidos.append("PIS")
-            if str(row.get("COFINS Retido?", "")).strip().upper() == "RETIDO":
+            if str(row.get("COFINS Retido?", "")).strip().upper() == "COM RETENÇÃO":
                 soma_pcc += val_cofins
                 pcc_retidos.append("COFINS")
-            if str(row.get("CSLL Retida?", "")).strip().upper() == "RETIDO":
+            if str(row.get("CSLL Retida?", "")).strip().upper() == "COM RETENÇÃO":
                 soma_pcc += val_csll
                 pcc_retidos.append("CSLL")
 
@@ -382,7 +407,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                     "descrição": desc_pcc,
                 })
 
-            if str(row.get("IRRF Retido?", "")).strip().upper() == "RETIDO" and val_irrf > 0:
+            if str(row.get("IRRF Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_irrf > 0:
                 desc_irrf = f"Retenção IRRF s/ NF - {num_nota} {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
@@ -394,7 +419,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                     "descrição": desc_irrf,
                 })
 
-            if str(row.get("INSS Retido?", "")).strip().upper() == "RETIDO" and val_inss > 0:
+            if str(row.get("INSS Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_inss > 0:
                 desc_inss = f"Retenção INSS s/ NF - {num_nota} {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
@@ -406,7 +431,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                     "descrição": desc_inss,
                 })
 
-            if str(row.get("ISS Retido?", "")).strip().upper() == "RETIDO" and val_iss > 0:
+            if str(row.get("ISS Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_iss > 0:
                 desc_iss = f"Retenção ISS s/ NF - {num_nota} {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
@@ -429,6 +454,45 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
             })
 
     return pd.DataFrame(linhas_alterdata)
+
+
+# ============================================================
+# GERAR ABA DE NOTAS CANCELADAS E SUBSTITUÍDAS
+# ============================================================
+def gerar_aba_substituidas(eventos_list, df_nfse):
+    """Mapeia os dados das notas originais e substitutas com base nos eventos."""
+    if not eventos_list:
+        return pd.DataFrame()
+
+    linhas_subst = []
+    mapa_nfse = {}
+
+    if df_nfse is not None and not df_nfse.empty:
+        for _, row in df_nfse.iterrows():
+            chave = str(row.get("Chave NFS-e", "")).strip()
+            if chave:
+                mapa_nfse[chave] = row
+
+    for ev in eventos_list:
+        ch_orig = ev.get("Chave NFS-e Original", "")
+        ch_sub = ev.get("Chave NFS-e Substituta", "")
+
+        nf_orig = mapa_nfse.get(ch_orig, {})
+        nf_sub = mapa_nfse.get(ch_sub, {})
+
+        linhas_subst.append({
+            "Chave Nota Cancelada": ch_orig,
+            "Nº Nota Cancelada": nf_orig.get("Número da NFS-e", "Não importada no lote"),
+            "Valor Nota Cancelada": nf_orig.get("Valor do Serviço", "N/A"),
+            "Chave Nota Substituta (Nova)": ch_sub,
+            "Nº Nota Substituta (Nova)": nf_sub.get("Número da NFS-e", "Não importada no lote"),
+            "Valor Nota Substituta": nf_sub.get("Valor do Serviço", "N/A"),
+            "Motivo Cancelamento": ev.get("Motivo Cancelamento", ""),
+            "Descrição do Evento": ev.get("Descrição Evento", ""),
+            "Data do Evento": ev.get("Data Evento", ""),
+        })
+
+    return pd.DataFrame(linhas_subst)
 
 
 # ============================================================
@@ -480,7 +544,8 @@ if uploaded_files:
                     st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
 
         if xmls_para_processar:
-            registros = []
+            registros_nfse = []
+            registros_eventos = []
             erros_processamento = []
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -491,7 +556,11 @@ if uploaded_files:
                     f"Processando [{i+1}/{len(xmls_para_processar)}]: {nome_xml}"
                 )
                 try:
-                    registros.append(extrair_nfse_xml(caminho_xml))
+                    dados = extrair_xml(caminho_xml)
+                    if dados.get("tipo_xml") == "EVENTO":
+                        registros_eventos.append(dados)
+                    else:
+                        registros_nfse.append(dados)
                 except Exception as err:
                     erros_processamento.append(f"{nome_xml}: {str(err)}")
                 progress_bar.progress((i + 1) / len(xmls_para_processar))
@@ -503,20 +572,25 @@ if uploaded_files:
                     for err_msg in erros_processamento:
                         st.write(f"- {err_msg}")
 
-            df = pd.DataFrame(registros)
-            st.session_state["df_extrato"] = df
+            df_nfse = pd.DataFrame(registros_nfse)
+            st.session_state["df_extrato"] = df_nfse
+            st.session_state["eventos_list"] = registros_eventos
 
             mapa_tipo_servico_xml = {}
-            for _, row in df.iterrows():
-                cod = str(row.get("Código Tributação", "") or "").strip()
-                tipo = str(row.get("Tipo de Serviço", "") or "").strip()
-                if cod and tipo and cod not in mapa_tipo_servico_xml:
-                    mapa_tipo_servico_xml[cod] = tipo
+            if not df_nfse.empty:
+                for _, row in df_nfse.iterrows():
+                    cod = str(row.get("Código Tributação", "") or "").strip()
+                    tipo = str(row.get("Tipo de Serviço", "") or "").strip()
+                    if cod and tipo and cod not in mapa_tipo_servico_xml:
+                        mapa_tipo_servico_xml[cod] = tipo
             st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
 
             mapa_contas = carregar_banco_dados_github()
-            codigos_na_nf = set(df["Código Tributação"].dropna().unique())
-            ausentes = [c for c in codigos_na_nf if c and c not in mapa_contas]
+            if not df_nfse.empty:
+                codigos_na_nf = set(df_nfse["Código Tributação"].dropna().unique())
+                ausentes = [c for c in codigos_na_nf if c and c not in mapa_contas]
+            else:
+                ausentes = []
 
             st.session_state["codigos_ausentes"] = ausentes
 
@@ -529,6 +603,7 @@ if (
 ):
     mapa_contas = carregar_banco_dados_github()
     df = st.session_state["df_extrato"]
+    eventos_list = st.session_state.get("eventos_list", [])
     ausentes = st.session_state.get("codigos_ausentes", [])
     mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
 
@@ -573,9 +648,14 @@ if (
 
     if not st.session_state.get("codigos_ausentes"):
         df_alterdata = gerar_aba_alterdata(df, mapa_contas)
+        df_substituidas = gerar_aba_substituidas(eventos_list, df)
 
         st.subheader("📊 Prévia - Aba Alterdata")
         st.dataframe(df_alterdata, use_container_width=True)
+
+        if not df_substituidas.empty:
+            st.subheader("⚠️ Notas Canceladas e Substituídas Identificadas")
+            st.dataframe(df_substituidas, use_container_width=True)
 
         buffer = io.BytesIO()
         with pd.ExcelWriter(
@@ -583,6 +663,11 @@ if (
         ) as writer:
             df_alterdata.to_excel(writer, index=False, sheet_name="Alterdata")
             df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+
+            if not df_substituidas.empty:
+                df_substituidas.to_excel(
+                    writer, index=False, sheet_name="Notas Canceladas e Substituídas"
+                )
 
             ws = writer.sheets["Alterdata"]
             for row in range(2, ws.max_row + 1):
