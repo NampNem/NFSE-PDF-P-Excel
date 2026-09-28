@@ -77,9 +77,16 @@ def formatar_valor(valor):
 def converter_data_obj(data_str):
     if not data_str:
         return None
+    s = str(data_str).strip()
+    # Formato do XML (AAAA-MM-DD): lê explicitamente, sem dayfirst,
+    # senão o pandas pode inverter dia e mês (2026-01-12 -> 01/12/2026)
+    if re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        try:
+            return pd.to_datetime(s[:10], format="%Y-%m-%d").date()
+        except:
+            return None
     try:
-        dt = pd.to_datetime(data_str, dayfirst=True)
-        return dt.date()
+        return pd.to_datetime(s, dayfirst=True).date()
     except:
         return None
 
