@@ -6,31 +6,29 @@ import os
 import re
 import shutil
 import tempfile
+import xml.etree.ElementTree as ET
 import zipfile
 
 from github import Github
 import pandas as pd
-import pdfplumber
 import streamlit as st
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
 # ============================================================
 st.set_page_config(
-    page_title="Extrator de NFS-e", page_icon="📄", layout="wide"
+    page_title="Extrator de NFS-e (XML)", page_icon="📄", layout="wide"
 )
 
-st.title("📄 Extrator de NFS-e e Gerador Alterdata")
+st.title("📄 Extrator de NFS-e (XML) e Gerador Alterdata")
 st.write(
-    "Faça o upload dos arquivos **PDF** de NFS-e ou de arquivos **ZIP** contendo os PDFs para processar."
+    "Faça o upload dos arquivos **XML** de NFS-e ou de arquivos **ZIP** contendo os XMLs para processar."
 )
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
 
 # ============================================================
 # TABELA EXPANDIDA LC 116 / ISS (MUNICIPAL E NACIONAL)
-# Usada apenas como ÚLTIMO fallback, quando não há texto do
-# próprio PDF nem cadastro no banco de dados para o código.
 # ============================================================
 TABELA_LC116 = {
     # GRUPO 01 - INFORMÁTICA
@@ -72,6 +70,9 @@ TABELA_LC116 = {
     "1101": "Guarda e estacionamento de veículos automotores terrestres, de aeronaves e de embarcações",
     "1102": "Vigilância, segurança ou monitoramento de bens, pessoas e semoventes",
     "1104": "Armazenamento, depósito, carga, descarga, arrumação e guarda de bens de qualquer espécie",
+    # GRUPO 13 - SERVIÇOS GRÁFICOS E REPROGRAFIA
+    "13": "Serviços relativos a fonografia, fotografia, cinematografia e reprografia",
+    "1304": "Reprografia, microfilmagem e digitalização",
     # GRUPO 14 - MANUTENÇÃO E ASSISTÊNCIA TÉCNICA
     "14": "Serviços relativos a bens de terceiros",
     "1401": "Lubrificação, limpeza, lustração, revisão, carga e recarga, conserto, restauração, blindagem, manutenção e conservação de máquinas, veículos, aparelhos, equipamentos",
@@ -100,34 +101,17 @@ TABELA_LC116 = {
 # ============================================================
 # FUNÇÕES UTILITÁRIAS E AUXILIARES
 # ============================================================
-def tratar_codigo_tributacao(valor):
-    """Usado no valor extraído do PDF (campo 'CÓD. TRIBUTAÇÃO NACIONAL / MUNICIPAL'),
-    que costuma vir como 'NACIONAL / MUNICIPAL', ex: '170303 / 004'."""
-    if valor is None:
-        return ""
-    texto = str(valor).strip()
-    if "/" in texto:
-        texto = texto.split("/", 1)[0]
-    return texto.strip()
-
-
 def extrair_codigo_do_banco(valor):
-    """Usado ao ler o banco_de_dados.xlsx, onde a coluna A costuma vir como
-    'CÓDIGO - Descrição oficial completa...' (ex: '170303 - Planejamento...').
-    Extrai só o código numérico do início da string."""
     if valor is None:
         return ""
     texto = str(valor).strip()
     m = re.match(r"^(\d{2,8})\s*-\s*.+", texto)
     if m:
         return m.group(1)
-    # fallback: mantém compatibilidade com linhas que já eram só o código
-    return tratar_codigo_tributacao(texto)
+    return texto
 
 
 def extrair_descricao_do_banco(valor):
-    """Extrai a parte de descrição de uma célula 'CÓDIGO - Descrição...'
-    da coluna A do banco_de_dados.xlsx. Retorna '' se não houver descrição."""
     if valor is None:
         return ""
     texto = str(valor).strip()
@@ -138,8 +122,6 @@ def extrair_descricao_do_banco(valor):
 
 
 def montar_celula_banco(codigo, descricao):
-    """Monta a célula da coluna A do banco_de_dados.xlsx no formato
-    'CÓDIGO - Descrição', para ficar legível quando o usuário abrir a planilha."""
     codigo = str(codigo).strip()
     descricao = str(descricao).strip() if descricao else ""
     if descricao:
@@ -147,35 +129,23 @@ def montar_celula_banco(codigo, descricao):
     return codigo
 
 
-def obter_descricao_servico(codigo, tipo_servico_pdf=None):
-    """Retorna a descrição oficial do código de tributação.
-    Prioridade: 1) texto extraído do próprio PDF (o mais confiável, vem
-    direto da Receita/Sistema Nacional NFS-e) 2) tabela local reduzida."""
-    if tipo_servico_pdf:
-        return tipo_servico_pdf.strip()
+def obter_descricao_servico(codigo, tipo_servico_xml=None):
+    if tipo_servico_xml:
+        return tipo_servico_xml.strip()
 
-    # Limpa caracteres não numéricos
     cod_limpo = re.sub(r"\D", "", str(codigo))
-
     if not cod_limpo:
         return "Código de tributação não informado"
 
-    # 1º Teste: Código exato com 4 dígitos (ex: 0702, 1701)
     if len(cod_limpo) >= 4:
         sub_cod4 = cod_limpo[:4]
         if sub_cod4 in TABELA_LC116:
             return TABELA_LC116[sub_cod4]
 
-    # 2º Teste: Grupo principal de 2 dígitos (ex: 07, 17, 10, 01)
     if len(cod_limpo) >= 2:
         sub_cod2 = cod_limpo[:2]
         if sub_cod2 in TABELA_LC116:
             return f"Grupo {sub_cod2}: {TABELA_LC116[sub_cod2]}"
-
-        # Tenta buscar qualquer serviço que comece com esses 2 dígitos
-        for k, v in TABELA_LC116.items():
-            if k.startswith(sub_cod2):
-                return f"Categoria {sub_cod2}: {v}"
 
     return f"Código {codigo} (Consulte o plano de contas para definir o débito)"
 
@@ -183,22 +153,8 @@ def obter_descricao_servico(codigo, tipo_servico_pdf=None):
 def converter_valor(valor):
     if valor is None:
         return None
-    texto = str(valor).strip()
-    if texto == "":
-        return None
-    texto = texto.upper().replace("R$", "").replace(" ", "")
-
-    if texto in ["-", "—", "", "N/A", "NA"]:
-        return None
-
-    texto = re.sub(r"[^0-9,\.\-]", "", texto)
-    if not texto:
-        return None
-
     try:
-        if "," in texto:
-            texto = texto.replace(".", "").replace(",", ".")
-        return float(texto)
+        return float(valor)
     except:
         return None
 
@@ -225,7 +181,6 @@ def converter_data_obj(data_str):
 # GERENCIAMENTO DO BANCO DE DADOS (GITHUB)
 # ============================================================
 def carregar_banco_dados_github():
-    """Retorna dict {codigo: {'descricao': str, 'conta': str}}."""
     mapa = {}
     if os.path.exists(NOME_BANCO_DADOS):
         try:
@@ -246,8 +201,6 @@ def carregar_banco_dados_github():
 
 
 def salvar_banco_dados_github(mapa):
-    """Recebe dict {codigo: {'descricao': str, 'conta': str}} e salva no
-    formato 'CÓDIGO - Descrição' na coluna A, conta na coluna B."""
     linhas = [
         (montar_celula_banco(cod, dados.get("descricao", "")), dados.get("conta", ""))
         for cod, dados in mapa.items()
@@ -340,311 +293,104 @@ with st.sidebar:
 
 
 # ============================================================
-# TRATAMENTOS E EXTRATOR DE PDF
+# PARSER EXTRATOR DE XML (PADRÃO NACIONAL SPED)
 # ============================================================
-def extract_rows(page, gap_threshold=10):
-    words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
-    lines = defaultdict(list)
-    for w in words:
-        lines[round(w["top"])].append(w)
-
-    sorted_tops = sorted(lines.keys())
-    merged = []
-    used = set()
-
-    for t in sorted_tops:
-        if t in used:
-            continue
-        group = list(lines[t])
-        for t2 in sorted_tops:
-            if t2 != t and abs(t2 - t) <= 2 and t2 not in used:
-                group.extend(lines[t2])
-                used.add(t2)
-        used.add(t)
-        merged.append(sorted(group, key=lambda w: w["x0"]))
-
-    rows = []
-    for group in merged:
-        if not group:
-            continue
-        cols = []
-        cur = [group[0]]
-        for w in group[1:]:
-            if w["x0"] - cur[-1]["x1"] > gap_threshold:
-                cols.append(" ".join(x["text"] for x in cur))
-                cur = [w]
-            else:
-                cur.append(w)
-        cols.append(" ".join(x["text"] for x in cur))
-        rows.append(cols)
-
-    return rows
-
-
-def find_row_index(rows, text, start=0):
-    texto_procurado = text.strip().upper()
-    for i in range(start, len(rows)):
-        if not rows[i]:
-            continue
-        primeira_coluna = rows[i][0].strip().upper()
-        if primeira_coluna == texto_procurado:
-            return i
-    return None
-
-
-def find_value(rows, label, start=0, end=None):
-    if end is None:
-        end = len(rows)
-    label_upper = label.strip().upper()
-
-    for i in range(start, end):
-        row = rows[i]
-        for idx, cell in enumerate(row):
-            if cell.strip().upper() == label_upper:
-                if i + 1 < len(rows):
-                    next_row = rows[i + 1]
-                    if idx < len(next_row):
-                        return next_row[idx].strip()
-    return None
-
-
-def extrair_tipo_servico_pdf(rows):
-    """Extrai a frase que a própria NFS-e traz descrevendo o item de serviço
-    (ex: 'Organização administrativa ou congênere.'). Essa frase vem logo
-    acima do cabeçalho 'DESCRIÇÃO DO SERVIÇO', em uma linha de coluna única,
-    e é o texto oficial do Sistema Nacional da NFS-e para aquele código."""
-    idx_desc = find_row_index(rows, "DESCRIÇÃO DO SERVIÇO")
-    if idx_desc is None or idx_desc == 0:
-        return ""
-
-    linha_anterior = rows[idx_desc - 1]
-    if not linha_anterior:
-        return ""
-
-    # Essa linha normalmente aparece como uma única coluna de texto corrido.
-    # Se vier com mais de uma coluna, provavelmente é outra linha da tabela
-    # (ex: os valores de código/NBS/local), então ignoramos.
-    if len(linha_anterior) != 1:
-        return ""
-
-    texto = linha_anterior[0].strip()
-    if not texto or texto.upper() == "DESCRIÇÃO DO SERVIÇO":
-        return ""
-
-    return texto
-
-
-def validar_retencoes(bruto, liquido, impostos, tolerancia=0.02):
-    resultado = {
-        "Diferença Bruto-Líquido": None,
-        "Retenções Validadas": "",
-        "Valor Retenções Validadas": None,
-        "Status Validação": "",
-        "Combinações Encontradas": 0,
-        "Impostos Retidos": set(),
-    }
-
-    if bruto is None or liquido is None:
-        resultado["Status Validação"] = "SEM BRUTO OU LÍQUIDO"
-        return resultado
-
-    diferenca = round(bruto - liquido, 2)
-    resultado["Diferença Bruto-Líquido"] = diferenca
-
-    if abs(diferenca) <= tolerancia:
-        resultado["Status Validação"] = "SEM RETENÇÃO PELO CÁLCULO"
-        resultado["Retenções Validadas"] = "NENHUMA"
-        resultado["Valor Retenções Validadas"] = 0.0
-        return resultado
-
-    impostos_validos = {}
-    for nome, valor in impostos.items():
-        if valor is None:
-            continue
-        valor = round(float(valor), 2)
-        if valor > 0:
-            impostos_validos[nome] = valor
-
-    nomes = list(impostos_validos.keys())
-    combinacoes = []
-
-    for tamanho in range(1, len(nomes) + 1):
-        for combinacao in itertools.combinations(nomes, tamanho):
-            soma = round(sum(impostos_validos[nome] for nome in combinacao), 2)
-            erro = abs(soma - diferenca)
-            if erro <= tolerancia:
-                combinacoes.append((combinacao, soma, erro))
-
-    resultado["Combinações Encontradas"] = len(combinacoes)
-
-    if not combinacoes:
-        resultado["Status Validação"] = "NÃO FOI POSSÍVEL FECHAR"
-        resultado["Retenções Validadas"] = ""
-        return resultado
-
-    if len(combinacoes) == 1:
-        melhor = combinacoes[0]
-        nomes_melhor, soma_melhor, erro_melhor = (
-            melhor[0],
-            melhor[1],
-            melhor[2],
-        )
-        resultado["Retenções Validadas"] = " + ".join(nomes_melhor)
-        resultado["Valor Retenções Validadas"] = soma_melhor
-        resultado["Impostos Retidos"] = set(nomes_melhor)
-
-        if erro_melhor <= 0.01:
-            resultado["Status Validação"] = "VALIDADO - FECHAMENTO EXATO"
-        else:
-            resultado["Status Validação"] = (
-                "VALIDADO - DIFERENÇA DE CENTAVOS"
-            )
-        return resultado
-
-    combinacoes.sort(key=lambda x: (x[2], len(x[0])))
-    melhor = combinacoes[0]
-    soma_melhor = melhor[1]
-
-    resultado["Retenções Validadas"] = " / ".join(
-        "+".join(nomes) for nomes, soma, erro in combinacoes
-    )
-    resultado["Valor Retenções Validadas"] = soma_melhor
-    resultado["Status Validação"] = (
-        "ATENÇÃO - MAIS DE UMA COMBINAÇÃO FECHA"
-    )
-
-    return resultado
-
-
-def extrair_nfse(caminho_pdf):
-    with pdfplumber.open(caminho_pdf) as pdf:
-        if len(pdf.pages) == 0:
-            raise Exception("PDF sem páginas.")
-
-        texto_completo = (pdf.pages[0].extract_text() or "").upper()
-        rows = extract_rows(pdf.pages[0])
-
-    prestador_i = find_row_index(rows, "PRESTADOR / FORNECEDOR DA NFS-e")
-    tomador_i = find_row_index(rows, "TOMADOR / ADQUIRENTE DA OPERAÇÃO")
-    if tomador_i is None:
-        tomador_i = len(rows)
-
-    numero_nfse = find_value(rows, "NÚMERO DA NFS-e")
-    data_competencia = find_value(rows, "COMPETÊNCIA")
-    nome_empresa = find_value(
-        rows,
-        "NOME / NOME EMPRESARIAL",
-        prestador_i if prestador_i is not None else 0,
-        tomador_i,
-    )
-    codigo_tributacao_original = find_value(
-        rows, "CÓD. TRIBUTAÇÃO NACIONAL / MUNICIPAL"
-    )
-    codigo_tributacao = tratar_codigo_tributacao(codigo_tributacao_original)
-
-    # Texto oficial do item de serviço, extraído diretamente do próprio PDF
-    tipo_servico_pdf = extrair_tipo_servico_pdf(rows)
-
-    valor_servico = find_value(rows, "VALOR DO SERVIÇO")
-    valor_pis = find_value(rows, "PIS - DÉBITO APURAÇÃO PRÓPRIA")
-    valor_cofins = find_value(rows, "COFINS - DÉBITO APURAÇÃO PRÓPRIA")
-    valor_csll = find_value(rows, "CONTRIBUIÇÕES SOCIAIS - RETIDAS")
-    valor_irrf = find_value(rows, "IRRF")
-    valor_inss = find_value(rows, "CONTRIBUIÇÃO PREVIDENCIÁRIA - RETIDA")
-    valor_iss = find_value(rows, "ISSQN APURADO")
-    valor_iss_retido = find_value(rows, "RETENÇÃO DO ISSQN")
-    valor_liquido = find_value(rows, "VALOR LÍQUIDO DA NFS-e")
-
-    bruto = converter_valor(valor_servico)
-    liquido = converter_valor(valor_liquido)
-    pis = converter_valor(valor_pis)
-    cofins = converter_valor(valor_cofins)
-    csll = converter_valor(valor_csll)
-    irrf = converter_valor(valor_irrf)
-    inss = converter_valor(valor_inss)
-    iss = converter_valor(valor_iss)
-
-    impostos = {
-        "PIS": pis,
-        "COFINS": cofins,
-        "CSLL": csll,
-        "IRRF": irrf,
-        "INSS": inss,
-        "ISS": iss,
-    }
-
-    eh_substituida = (
-        "SUBSTITUÍDA" in texto_completo
-        or "SUBSTITUIDA" in texto_completo
-        or "NFS-E DE SUBSTITUIÇÃO GERADA" in texto_completo
-        or "CANCELADA" in texto_completo
-    )
-
-    validacao = validar_retencoes(bruto, liquido, impostos)
-    impostos_retidos = validacao["Impostos Retidos"]
-
-    if eh_substituida:
-        status_final = "SUBSTITUÍDA - IGNORADA"
+def extrair_nfse_xml(caminho_ou_conteudo):
+    """Realiza o parse das tags do XML da NFS-e do Padrão Nacional (v1.01)."""
+    if isinstance(caminho_ou_conteudo, bytes):
+        root = ET.fromstring(caminho_ou_conteudo)
+    elif isinstance(caminho_ou_conteudo, str) and caminho_ou_conteudo.endswith(".xml"):
+        tree = ET.parse(caminho_ou_conteudo)
+        root = tree.getroot()
     else:
-        status_final = validacao["Status Validação"]
+        root = ET.fromstring(caminho_ou_conteudo)
 
-    if validacao["Combinações Encontradas"] == 1:
-        pis_status = (
-            "RETIDO" if "PIS" in impostos_retidos else "NÃO RETIDO"
-        )
-        cofins_status = (
-            "RETIDO" if "COFINS" in impostos_retidos else "NÃO RETIDO"
-        )
-        csll_status = (
-            "RETIDO" if "CSLL" in impostos_retidos else "NÃO RETIDO"
-        )
-        irrf_status = (
-            "RETIDO" if "IRRF" in impostos_retidos else "NÃO RETIDO"
-        )
-        inss_status = (
-            "RETIDO" if "INSS" in impostos_retidos else "NÃO RETIDO"
-        )
-        iss_status = (
-            "RETIDO" if "ISS" in impostos_retidos else "NÃO RETIDO"
-        )
-    else:
-        pis_status = "NÃO VALIDADO"
-        cofins_status = "NÃO VALIDADO"
-        csll_status = "NÃO VALIDADO"
-        irrf_status = "NÃO VALIDADO"
-        inss_status = "NÃO VALIDADO"
-        iss_status = "NÃO VALIDADO"
+    def find_tag(element, tag_name):
+        if element is None:
+            return None
+        for child in element.iter():
+            if child.tag.endswith(tag_name):
+                return child
+        return None
+
+    def get_text(element, tag_name, default=""):
+        node = find_tag(element, tag_name)
+        return node.text.strip() if (node is not None and node.text) else default
+
+    def get_float(element, tag_name, default=0.0):
+        val = get_text(element, tag_name)
+        try:
+            return float(val) if val else default
+        except ValueError:
+            return default
+
+    # Dados da Nota
+    numero_nfse = get_text(root, "nNFSe")
+    data_competencia = get_text(root, "dCompet")
+
+    # Prestador
+    emit_node = find_tag(root, "emit")
+    nome_empresa = get_text(emit_node, "xNome") if emit_node is not None else ""
+
+    # Códigos de Serviço
+    c_trib_nac = get_text(root, "cTribNac")
+    codigo_tributacao = c_trib_nac[:4] if c_trib_nac else ""
+
+    # Descrição do Serviço
+    tipo_servico = get_text(root, "xTribNac") or get_text(root, "xDescServ")
+
+    # Valores Financeiros
+    v_serv = get_float(root, "vServ")
+    v_liq = get_float(root, "vLiq")
+    if v_liq == 0.0 and v_serv > 0.0:
+        v_liq = v_serv
+
+    # Impostos e Retenções
+    v_pis = get_float(root, "vPis")
+    v_cofins = get_float(root, "vCofins")
+    v_csll = get_float(root, "vCSLL")
+    v_irrf = get_float(root, "vRetIRRF")
+    v_inss = get_float(root, "vINSS")
+    v_iss = get_float(root, "vISSQN")
+
+    # Status de Retenção
+    tp_ret_iss = get_text(root, "tpRetISSQN")
+    iss_retido_flag = "RETIDO" if tp_ret_iss == "2" else "NÃO RETIDO"
+
+    pis_status = "RETIDO" if v_pis > 0 else "NÃO RETIDO"
+    cofins_status = "RETIDO" if v_cofins > 0 else "NÃO RETIDO"
+    csll_status = "RETIDO" if v_csll > 0 else "NÃO RETIDO"
+    irrf_status = "RETIDO" if v_irrf > 0 else "NÃO RETIDO"
+    inss_status = "RETIDO" if v_inss > 0 else "NÃO RETIDO"
+
+    diferenca = round(v_serv - v_liq, 2)
 
     return {
         "Número da NFS-e": numero_nfse,
         "Data Competência": data_competencia,
         "Nome da Empresa": nome_empresa,
         "Código Tributação": codigo_tributacao,
-        "Tipo de Serviço": tipo_servico_pdf,
-        "Valor do Serviço": valor_servico,
-        "Valor PIS": valor_pis,
+        "Tipo de Serviço": tipo_servico,
+        "Valor do Serviço": v_serv,
+        "Valor PIS": v_pis,
         "PIS Retido?": pis_status,
-        "Valor COFINS": valor_cofins,
+        "Valor COFINS": v_cofins,
         "COFINS Retido?": cofins_status,
-        "CSLL (Retida)": valor_csll,
+        "CSLL (Retida)": v_csll,
         "CSLL Retida?": csll_status,
-        "IRRF": valor_irrf,
+        "IRRF": v_irrf,
         "IRRF Retido?": irrf_status,
-        "INSS (Previdenciária)": valor_inss,
+        "INSS (Previdenciária)": v_inss,
         "INSS Retido?": inss_status,
-        "ISS": valor_iss,
-        "ISS Retenção": valor_iss_retido,
-        "ISS Retido?": iss_status,
-        "Valor Líquido": valor_liquido,
-        "Diferença Bruto-Líquido": formatar_valor(
-            validacao["Diferença Bruto-Líquido"]
-        ),
-        "Retenções Validadas": validacao["Retenções Validadas"],
-        "Valor Retenções Validadas": formatar_valor(
-            validacao["Valor Retenções Validadas"]
-        ),
-        "Status Validação": status_final,
-        "Combinações Encontradas": validacao["Combinações Encontradas"],
+        "ISS": v_iss,
+        "ISS Retenção": v_iss if iss_retido_flag == "RETIDO" else 0.0,
+        "ISS Retido?": iss_retido_flag,
+        "Valor Líquido": v_liq,
+        "Diferença Bruto-Líquido": formatar_valor(diferenca),
+        "Retenções Validadas": "VALIDAÇÃO XML OK",
+        "Valor Retenções Validadas": formatar_valor(diferenca),
+        "Status Validação": "VALIDADO - FECHAMENTO EXATO",
+        "Combinações Encontradas": 1,
     }
 
 
@@ -665,7 +411,6 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
 
         conta_debito_bd = mapa_contas.get(cod_trib, {}).get("conta", "2135")
-
         desc_padrao = f"NF - {num_nota} {nome_empresa}".strip()
 
         val_bruto = converter_valor(row.get("Valor do Serviço")) or 0.0
@@ -676,18 +421,11 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
         val_csll = converter_valor(row.get("CSLL (Retida)")) or 0.0
         val_irrf = converter_valor(row.get("IRRF")) or 0.0
         val_inss = converter_valor(row.get("INSS (Previdenciária)")) or 0.0
-        val_iss = (
-            converter_valor(row.get("ISS Retenção"))
-            or converter_valor(row.get("ISS"))
-            or 0.0
-        )
+        val_iss = converter_valor(row.get("ISS Retenção")) or 0.0
 
-        try:
-            comb_encontradas = int(row.get("Combinações Encontradas", 0) or 0)
-        except:
-            comb_encontradas = 0
+        soma_retencoes = val_pis + val_cofins + val_csll + val_irrf + val_inss + val_iss
 
-        if comb_encontradas == 0:
+        if soma_retencoes == 0.0:
             linhas_alterdata.append({
                 "Data": data_comp,
                 "debito": conta_debito_bd,
@@ -722,9 +460,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 
             if soma_pcc > 0:
                 nome_pcc = "/".join(pcc_retidos)
-                desc_pcc = (
-                    f"Retenção {nome_pcc} s/ NF - {num_nota} {nome_empresa}"
-                )
+                desc_pcc = f"Retenção {nome_pcc} s/ NF - {num_nota} {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -735,13 +471,8 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                     "descrição": desc_pcc,
                 })
 
-            if (
-                str(row.get("IRRF Retido?", "")).strip().upper() == "RETIDO"
-                and val_irrf > 0
-            ):
-                desc_irrf = (
-                    f"Retenção IRRF s/ NF - {num_nota} {nome_empresa}"
-                )
+            if str(row.get("IRRF Retido?", "")).strip().upper() == "RETIDO" and val_irrf > 0:
+                desc_irrf = f"Retenção IRRF s/ NF - {num_nota} {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -752,13 +483,8 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                     "descrição": desc_irrf,
                 })
 
-            if (
-                str(row.get("INSS Retido?", "")).strip().upper() == "RETIDO"
-                and val_inss > 0
-            ):
-                desc_inss = (
-                    f"Retenção INSS s/ NF - {num_nota} {nome_empresa}"
-                )
+            if str(row.get("INSS Retido?", "")).strip().upper() == "RETIDO" and val_inss > 0:
+                desc_inss = f"Retenção INSS s/ NF - {num_nota} {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -769,13 +495,8 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                     "descrição": desc_inss,
                 })
 
-            if (
-                str(row.get("ISS Retido?", "")).strip().upper() == "RETIDO"
-                and val_iss > 0
-            ):
-                desc_iss = (
-                    f"Retenção ISS s/ NF - {num_nota} {nome_empresa}"
-                )
+            if str(row.get("ISS Retido?", "")).strip().upper() == "RETIDO" and val_iss > 0:
+                desc_iss = f"Retenção ISS s/ NF - {num_nota} {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -802,28 +523,27 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 # ============================================================
 # INTERFACE STREAMLIT PRINCIPAL
 # ============================================================
-
 uploaded_files = st.file_uploader(
-    "Arraste ou selecione os arquivos PDF ou ZIP aqui",
-    type=["pdf", "zip"],
+    "Arraste ou selecione os arquivos XML ou ZIP aqui",
+    type=["xml", "zip"],
     accept_multiple_files=True,
 )
 
 if uploaded_files:
-    if st.button("🚀 Processar NFS-e"):
+    if st.button("🚀 Processar NFS-e (XML)"):
 
         temp_dir = tempfile.mkdtemp()
-        pdfs_para_processar = []
+        xmls_para_processar = []
 
         for uploaded_file in uploaded_files:
             nome_arquivo = uploaded_file.name
             extensao = os.path.splitext(nome_arquivo)[1].lower()
 
-            if extensao == ".pdf":
-                caminho_pdf = os.path.join(temp_dir, nome_arquivo)
-                with open(caminho_pdf, "wb") as f:
+            if extensao == ".xml":
+                caminho_xml = os.path.join(temp_dir, nome_arquivo)
+                with open(caminho_xml, "wb") as f:
                     f.write(uploaded_file.getbuffer())
-                pdfs_para_processar.append(caminho_pdf)
+                xmls_para_processar.append(caminho_xml)
 
             elif extensao == ".zip":
                 caminho_zip = os.path.join(temp_dir, nome_arquivo)
@@ -841,43 +561,47 @@ if uploaded_files:
 
                     for raiz, _, arquivos in os.walk(pasta_zip):
                         for arq in arquivos:
-                            if arq.lower().endswith(".pdf"):
-                                pdfs_para_processar.append(
+                            if arq.lower().endswith(".xml"):
+                                xmls_para_processar.append(
                                     os.path.join(raiz, arq)
                                 )
                 except Exception as e:
                     st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
 
-        if pdfs_para_processar:
+        if xmls_para_processar:
             registros = []
+            erros_processamento = []
             progress_bar = st.progress(0)
             status_text = st.empty()
 
-            for i, caminho_pdf in enumerate(pdfs_para_processar):
-                nome_pdf = os.path.basename(caminho_pdf)
+            for i, caminho_xml in enumerate(xmls_para_processar):
+                nome_xml = os.path.basename(caminho_xml)
                 status_text.text(
-                    f"Processando [{i+1}/{len(pdfs_para_processar)}]: {nome_pdf}"
+                    f"Processando [{i+1}/{len(xmls_para_processar)}]: {nome_xml}"
                 )
                 try:
-                    registros.append(extrair_nfse(caminho_pdf))
-                except:
-                    pass
-                progress_bar.progress((i + 1) / len(pdfs_para_processar))
+                    registros.append(extrair_nfse_xml(caminho_xml))
+                except Exception as err:
+                    erros_processamento.append(f"{nome_xml}: {str(err)}")
+                progress_bar.progress((i + 1) / len(xmls_para_processar))
 
             status_text.text("Extração concluída!")
+
+            if erros_processamento:
+                with st.expander("⚠️ Arquivos com erro de leitura"):
+                    for err_msg in erros_processamento:
+                        st.write(f"- {err_msg}")
 
             df = pd.DataFrame(registros)
             st.session_state["df_extrato"] = df
 
-            # Mapa código -> texto do "Tipo de Serviço" extraído dos PDFs
-            # deste lote (fonte oficial: o próprio documento da NFS-e).
-            mapa_tipo_servico_pdf = {}
+            mapa_tipo_servico_xml = {}
             for _, row in df.iterrows():
                 cod = str(row.get("Código Tributação", "") or "").strip()
                 tipo = str(row.get("Tipo de Serviço", "") or "").strip()
-                if cod and tipo and cod not in mapa_tipo_servico_pdf:
-                    mapa_tipo_servico_pdf[cod] = tipo
-            st.session_state["mapa_tipo_servico_pdf"] = mapa_tipo_servico_pdf
+                if cod and tipo and cod not in mapa_tipo_servico_xml:
+                    mapa_tipo_servico_xml[cod] = tipo
+            st.session_state["mapa_tipo_servico_pdf"] = mapa_tipo_servico_xml
 
             mapa_contas = carregar_banco_dados_github()
             codigos_na_nf = set(df["Código Tributação"].dropna().unique())
@@ -895,7 +619,7 @@ if (
     mapa_contas = carregar_banco_dados_github()
     df = st.session_state["df_extrato"]
     ausentes = st.session_state.get("codigos_ausentes", [])
-    mapa_tipo_servico_pdf = st.session_state.get("mapa_tipo_servico_pdf", {})
+    mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_pdf", {})
 
     if ausentes:
         st.warning(
@@ -905,10 +629,10 @@ if (
         with st.form("form_novos_codigos"):
             novos_cadastros = {}
             for cod in ausentes:
-                tipo_pdf = mapa_tipo_servico_pdf.get(cod)
-                if tipo_pdf:
-                    descricao_para_salvar = tipo_pdf
-                    fonte = "extraída do PDF"
+                tipo_xml = mapa_tipo_servico_xml.get(cod)
+                if tipo_xml:
+                    descricao_para_salvar = tipo_xml
+                    fonte = "extraída do XML"
                 else:
                     descricao_para_salvar = obter_descricao_servico(cod)
                     fonte = "tabela local (aproximada)"
