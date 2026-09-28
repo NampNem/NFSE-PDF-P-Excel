@@ -335,12 +335,25 @@ def extrair_xml(caminho_ou_conteudo):
     if v_liq == 0.0 and v_serv > 0.0:
         v_liq = v_serv
 
+    def get_float_multi(element, nomes):
+        """Tenta várias grafias de tag e devolve o primeiro valor encontrado (>0)."""
+        for nome in nomes:
+            valor = get_float(element, nome)
+            if valor > 0:
+                return valor
+        return 0.0
+
     v_pis = get_float(root, "vPis")
     v_cofins = get_float(root, "vCofins")
-    v_csll = get_float(root, "vCSLL")
-    v_irrf = get_float(root, "vRetIRRF")
-    v_inss = get_float(root, "vINSS")
+    # Layout nacional: vRetCSLL (CSLL retida) e vRetCP (contribuição previdenciária retida)
+    v_csll = get_float_multi(root, ["vRetCSLL", "vCSLL"])
+    v_irrf = get_float_multi(root, ["vRetIRRF", "vIRRF"])
+    v_inss = get_float_multi(root, ["vRetCP", "vINSS"])
     v_iss = get_float(root, "vISSQN")
+
+    # Descontos reduzem o líquido sem serem retenção
+    v_desc = get_float(root, "vDescIncond") + get_float(root, "vDescCond")
+    v_base = round(v_serv - v_desc, 2)
 
     # Ordem de tentativa (em empates, escolhe o primeiro da lista)
     impostos = {
@@ -351,7 +364,7 @@ def extrair_xml(caminho_ou_conteudo):
         "INSS": v_inss,
         "ISS": v_iss,
     }
-    retidos, status_validacao, qtd_comb = validar_retencoes(v_serv, v_liq, impostos)
+    retidos, status_validacao, qtd_comb = validar_retencoes(v_base, v_liq, impostos)
 
     def val_ret(nome):
         """Só considera o valor do imposto se a retenção foi confirmada pelo cálculo."""
@@ -364,7 +377,7 @@ def extrair_xml(caminho_ou_conteudo):
     texto_retencoes = (
         "Retenção " + "/".join(lista_ret) if lista_ret else "Sem Retenção"
     )
-    diferenca = round(v_serv - v_liq, 2)
+    diferenca = round(v_base - v_liq, 2)
 
     return {
         "tipo_xml": "NFSE",
