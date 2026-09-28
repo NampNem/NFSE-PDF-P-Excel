@@ -1,7 +1,6 @@
 from collections import defaultdict
 import datetime
 import io
-import itertools
 import os
 import re
 import shutil
@@ -26,76 +25,6 @@ st.write(
 )
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
-
-# ============================================================
-# TABELA EXPANDIDA LC 116 / ISS (MUNICIPAL E NACIONAL)
-# ============================================================
-TABELA_LC116 = {
-    # GRUPO 01 - INFORMÁTICA
-    "01": "Serviços de informática e congêneres",
-    "0101": "Análise e desenvolvimento de sistemas",
-    "0102": "Programação",
-    "0103": "Processamento, armazenamento ou hospedagem de dados, textos, imagens, vídeos, páginas web, aplicativos e sistemas de informação",
-    "0104": "Elaboração de programas de computadores, inclusive de jogos eletrônicos",
-    "0105": "Licenciamento ou cessão de direito de uso de programas de computação",
-    "0106": "Assessoria e consultoria em informática",
-    "0107": "Suporte técnico em informática, inclusive instalação, configuração e manutenção de programas de computação e bancos de dados",
-    "0108": "Configuração e manutenção de redes, de páginas e de esquemas de nutrição visual",
-    "0109": "Disponibilização de conteúdos de áudio, vídeo, imagem e texto por meio da internet",
-    # GRUPO 07 - ENGENHARIA / ARQUITETURA / CONSTRUÇÃO
-    "07": "Serviços relativos a engenharia, arquitetura, geologia, urbanismo, construção civil, manutenção, limpeza e meio ambiente",
-    "0701": "Engenharia, agronomia, agrimensura, arquitetura, geologia, urbanismo, paisagismo e congêneres",
-    "0702": "Execução, por administração, empreitada ou subempreitada, de obras de construção civil, hidráulica ou elétrica e de outras obras semelhantes",
-    "0703": "Elaboração de planos diretores, estudos de viabilidade, projetos e especificações técnicas",
-    "0704": "Demolição",
-    "0705": "Reparação, conservação e reforma de edifícios, estradas, pontes, portos e congêneres",
-    "0706": "Colocação e instalação de tapetes, carpetes, assoalhos, cortinas, revestimentos de parede, vidros, divisórias, placas de gesso e congêneres",
-    "0709": "Varrição, coleta, remoção, incineração, tratamento, reciclagem, separação e destinação final de lixo, rejeitos e outros resíduos",
-    "0710": "Limpeza, manutenção e conservação de vias e logradouros públicos, imóveis, chaminés, piscinas, parques e jardins",
-    "0711": "Decoração e jardinagem, inclusive corte e poda de árvores",
-    "0712": "Controle e eliminação de pragas urbanas, dedetização, desinfecção, desinsetização, imunização e desratização",
-    # GRUPO 10 - INTERMEDIAÇÃO / AGENCIAMENTO
-    "10": "Serviços de intermediação e congêneres",
-    "1001": "Agenciamento, corretagem ou intermediação de câmbio, de títulos e valores mobiliários",
-    "1002": "Agenciamento, corretagem ou intermediação de títulos em geral, valores mobiliários e contratos quaisquer",
-    "1003": "Agenciamento, corretagem ou intermediação de direitos de propriedade industrial, artística ou literária",
-    "1004": "Agenciamento, corretagem ou intermediação de contratos de arrendamento mercantil (leasing), de franquia (franchising) e de faturização (factoring)",
-    "1005": "Agenciamento, corretagem ou intermediação de bens móveis ou imóveis, não abrangidos em outros itens",
-    "1006": "Agenciamento de notícias",
-    "1007": "Agenciamento de publicidade e propaganda, inclusive o agenciamento de veiculação por quaisquer meios",
-    "1008": "Agenciamento de navegação marítima, fluvial ou lacustre",
-    "1009": "Agenciamento de transporte de carga",
-    # GRUPO 11 - GUARDA, VIGILÂNCIA E ARMAZENAMENTO
-    "11": "Serviços de guarda, estacionamento, armazenamento, vigilância e rasteio",
-    "1101": "Guarda e estacionamento de veículos automotores terrestres, de aeronaves e de embarcações",
-    "1102": "Vigilância, segurança ou monitoramento de bens, pessoas e semoventes",
-    "1104": "Armazenamento, depósito, carga, descarga, arrumação e guarda de bens de qualquer espécie",
-    # GRUPO 13 - SERVIÇOS GRÁFICOS E REPROGRAFIA
-    "13": "Serviços relativos a fonografia, fotografia, cinematografia e reprografia",
-    "1304": "Reprografia, microfilmagem e digitalização",
-    # GRUPO 14 - MANUTENÇÃO E ASSISTÊNCIA TÉCNICA
-    "14": "Serviços relativos a bens de terceiros",
-    "1401": "Lubrificação, limpeza, lustração, revisão, carga e recarga, conserto, restauração, blindagem, manutenção e conservação de máquinas, veículos, aparelhos, equipamentos",
-    "1402": "Assistência técnica",
-    "1405": "Restauração, recondicionamento, acondicionamento, pintura, beneficiamento, lavagem, secagem, tingimento, galvanoplastia, anodização, corte, recorte, plastificação, costura e acabamento",
-    "1406": "Instalação e montagem de aparelhos, máquinas e equipamentos, inclusive montagem industrial",
-    # GRUPO 17 - CONSULTORIA, APOIO ADMINISTRATIVO E CONTABILIDADE
-    "17": "Serviços de apoio técnico, comercial, jurídico, contábil, administrativo e congêneres",
-    "1701": "Assessoria ou consultoria de qualquer natureza, não contida em outros itens",
-    "1702": "Perícias, laudos, exames técnicos e análises técnicas",
-    "1703": "Planejamento, organização e administração de feiras, exposições, congressos e congêneres",
-    "1704": "Recrutamento, agenciamento, seleção e colocação de mão de obra",
-    "1705": "Fornecimento de mão de obra, mesmo em caráter temporário, inclusive de empregados ou trabalhadores, avulsos ou temporários",
-    "1706": "Propaganda e publicidade, inclusive promoção de vendas, planejamento de campanhas ou sistemas de publicidade, elaboração de desenhos, textos e demais materiais publicitários",
-    "1712": "Adestramento, treinamento, ensino e avaliação de qualquer natureza",
-    "1714": "Advocacia",
-    "1719": "Contabilidade, inclusive serviços técnicos e auxiliares",
-    "1720": "Consultoria e assessoria econômica ou financeira",
-    "1725": "Inserção de textos, desenhos e outros materiais de propaganda e publicidade em qualquer meio (exceto em livros, jornais e periódicos)",
-    # GRUPO 24 - CHAVEIROS E SINALIZAÇÃO
-    "24": "Serviços de chaveiros, confecção de carimbos, placas, sinalização e congêneres",
-    "2401": "Serviços chaveiros, confecção de carimbos, placas, sinalização visual, banners, adesivos e congêneres",
-}
 
 
 # ============================================================
@@ -127,27 +56,6 @@ def montar_celula_banco(codigo, descricao):
     if descricao:
         return f"{codigo} - {descricao}"
     return codigo
-
-
-def obter_descricao_servico(codigo, tipo_servico_xml=None):
-    if tipo_servico_xml:
-        return tipo_servico_xml.strip()
-
-    cod_limpo = re.sub(r"\D", "", str(codigo))
-    if not cod_limpo:
-        return "Código de tributação não informado"
-
-    if len(cod_limpo) >= 4:
-        sub_cod4 = cod_limpo[:4]
-        if sub_cod4 in TABELA_LC116:
-            return TABELA_LC116[sub_cod4]
-
-    if len(cod_limpo) >= 2:
-        sub_cod2 = cod_limpo[:2]
-        if sub_cod2 in TABELA_LC116:
-            return f"Grupo {sub_cod2}: {TABELA_LC116[sub_cod2]}"
-
-    return f"Código {codigo} (Consulte o plano de contas para definir o débito)"
 
 
 def converter_valor(valor):
@@ -293,10 +201,10 @@ with st.sidebar:
 
 
 # ============================================================
-# PARSER EXTRATOR DE XML (PADRÃO NACIONAL SPED)
+# PARSER EXTRATOR DE XML
 # ============================================================
 def extrair_nfse_xml(caminho_ou_conteudo):
-    """Realiza o parse das tags do XML da NFS-e do Padrão Nacional (v1.01)."""
+    """Extrai os dados de tributação e serviço diretamente das tags do XML."""
     if isinstance(caminho_ou_conteudo, bytes):
         root = ET.fromstring(caminho_ou_conteudo)
     elif isinstance(caminho_ou_conteudo, str) and caminho_ou_conteudo.endswith(".xml"):
@@ -332,12 +240,15 @@ def extrair_nfse_xml(caminho_ou_conteudo):
     emit_node = find_tag(root, "emit")
     nome_empresa = get_text(emit_node, "xNome") if emit_node is not None else ""
 
-    # Códigos de Serviço
-    c_trib_nac = get_text(root, "cTribNac")
-    codigo_tributacao = c_trib_nac[:4] if c_trib_nac else ""
+    # Código exato do XML (ex: 100801, 100501, 130401) sem cortes
+    codigo_tributacao = get_text(root, "cTribNac")
 
-    # Descrição do Serviço
-    tipo_servico = get_text(root, "xTribNac") or get_text(root, "xDescServ")
+    # Descrição exata extraída do XML
+    tipo_servico = (
+        get_text(root, "xTribNac")
+        or get_text(root, "xTribMun")
+        or get_text(root, "xDescServ")
+    )
 
     # Valores Financeiros
     v_serv = get_float(root, "vServ")
@@ -601,7 +512,7 @@ if uploaded_files:
                 tipo = str(row.get("Tipo de Serviço", "") or "").strip()
                 if cod and tipo and cod not in mapa_tipo_servico_xml:
                     mapa_tipo_servico_xml[cod] = tipo
-            st.session_state["mapa_tipo_servico_pdf"] = mapa_tipo_servico_xml
+            st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
 
             mapa_contas = carregar_banco_dados_github()
             codigos_na_nf = set(df["Código Tributação"].dropna().unique())
@@ -619,7 +530,7 @@ if (
     mapa_contas = carregar_banco_dados_github()
     df = st.session_state["df_extrato"]
     ausentes = st.session_state.get("codigos_ausentes", [])
-    mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_pdf", {})
+    mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
 
     if ausentes:
         st.warning(
@@ -629,16 +540,12 @@ if (
         with st.form("form_novos_codigos"):
             novos_cadastros = {}
             for cod in ausentes:
-                tipo_xml = mapa_tipo_servico_xml.get(cod)
-                if tipo_xml:
-                    descricao_para_salvar = tipo_xml
-                    fonte = "extraída do XML"
-                else:
-                    descricao_para_salvar = obter_descricao_servico(cod)
-                    fonte = "tabela local (aproximada)"
+                descricao_para_salvar = mapa_tipo_servico_xml.get(
+                    cod, "Descrição do Serviço"
+                )
 
                 st.markdown(f"### 📌 Código: `{cod}`")
-                st.info(f"📄 **Descrição {fonte}:** {cod} - {descricao_para_salvar}")
+                st.info(f"📄 **Descrição do XML:** {cod} - {descricao_para_salvar}")
 
                 nova_conta = st.text_input(
                     f"Informe a conta débito para o código {cod} (deixe em branco para usar 2135):",
