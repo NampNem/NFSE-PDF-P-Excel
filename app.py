@@ -83,8 +83,19 @@ def converter_data_obj(data_str):
         return None
 
 
+def extrair_pasta_mes_ano(data_str):
+    """Extrai o formato 'AAAA-MM' a partir de uma data de competência."""
+    if not data_str:
+        return "SEM_DATA"
+    try:
+        dt = pd.to_datetime(data_str)
+        return dt.strftime("%Y-%m")
+    except:
+        return "SEM_DATA"
+
+
 def limpar_nome_arquivo(texto):
-    """Remove caracteres inválidos para nomes de arquivos no sistema operacional."""
+    """Remove caracteres inválidos para pastas/arquivos no SO."""
     return re.sub(r'[\\/*?:"<>|]', "", str(texto)).strip()
 
 
@@ -242,6 +253,7 @@ def extrair_xml(caminho_ou_conteudo):
         desc_evento = get_text(root, "xDesc")
         motivo_subst = get_text(root, "xMotivo")
         data_evento = get_text(root, "dhEvento")
+        cnpj_autor = get_text(root, "CNPJAutor")
 
         return {
             "tipo_xml": "EVENTO",
@@ -250,6 +262,7 @@ def extrair_xml(caminho_ou_conteudo):
             "Descrição Evento": desc_evento,
             "Motivo Cancelamento": motivo_subst,
             "Data Evento": data_evento,
+            "CNPJ Autor": cnpj_autor,
         }
 
     # NFS-E NORMAL
@@ -263,6 +276,7 @@ def extrair_xml(caminho_ou_conteudo):
 
     emit_node = find_tag(root, "emit")
     nome_empresa = get_text(emit_node, "xNome") if emit_node is not None else ""
+    cnpj_prestador = get_text(emit_node, "CNPJ") if emit_node is not None else ""
 
     codigo_tributacao = get_text(root, "cTribNac")
     tipo_servico = (
@@ -312,6 +326,7 @@ def extrair_xml(caminho_ou_conteudo):
         "Chave NFS-e": chave_nfse,
         "Número da NFS-e": numero_nfse,
         "Data Competência": data_competencia,
+        "CNPJ Prestador": cnpj_prestador,
         "Nome da Empresa": nome_empresa,
         "Código Tributação": codigo_tributacao,
         "Tipo de Serviço": tipo_servico,
@@ -464,6 +479,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 # GERAR ABA DE NOTAS CANCELADAS E SUBSTITUÍDAS
 # ============================================================
 def gerar_aba_substituidas(eventos_list, df_nfse):
+    """Mapeia notas canceladas/substitutas incluindo Nome e CNPJ do Fornecedor."""
     if not eventos_list:
         return pd.DataFrame()
 
@@ -483,14 +499,28 @@ def gerar_aba_substituidas(eventos_list, df_nfse):
         nf_orig = mapa_nfse.get(ch_orig, {})
         nf_sub = mapa_nfse.get(ch_sub, {})
 
+        # Tenta obter o nome do fornecedor do XML da NF ou assume N/A
+        fornecedor_nome = (
+            nf_orig.get("Nome da Empresa")
+            or nf_sub.get("Nome da Empresa")
+            or "Não encontrado no lote"
+        )
+        fornecedor_cnpj = (
+            nf_orig.get("CNPJ Prestador")
+            or nf_sub.get("CNPJ Prestador")
+            or ev.get("CNPJ Autor", "N/A")
+        )
+
         linhas_subst.append({
+            "Fornecedor / Prestador": fornecedor_nome,
+            "CNPJ Fornecedor": fornecedor_cnpj,
             "Chave Nota Cancelada": ch_orig,
             "Nº Nota Cancelada": nf_orig.get("Número da NFS-e", "Não importada no lote"),
             "Valor Nota Cancelada": nf_orig.get("Valor do Serviço", "N/A"),
             "Chave Nota Substituta (Nova)": ch_sub,
             "Nº Nota Substituta (Nova)": nf_sub.get("Número da NFS-e", "Não importada no lote"),
             "Valor Nota Substituta": nf_sub.get("Valor do Serviço", "N/A"),
-            "Motivo Cancelamento": ev.get("Motivo Cancelamento", ""),
+            "Motivo Cancelamento": ev.get("Motivo Cancelamento", "Não informado"),
             "Descrição do Evento": ev.get("Descrição Evento", ""),
             "Data do Evento": ev.get("Data Evento", ""),
         })
@@ -499,10 +529,10 @@ def gerar_aba_substituidas(eventos_list, df_nfse):
 
 
 # ============================================================
-# RENOMEAR E EMPACOTAR PDFS
+# RENOMEAR E ORGANIZAR PDFS EM PASTAS MENSAIS DENTRO DO ZIP
 # ============================================================
 def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
-    """Mapeia os PDFs pelo número/chave no XML e gera um ZIP com nomes padronizados."""
+    """Mapeia os PDFs, organiza por pastas mensais (AAAA-MM) e renomeia para FORNECEDOR - NF 0000.pdf."""
     if not pdfs_mapeados or df_nfse.empty:
         return None
 
@@ -512,12 +542,15 @@ def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
             chave = str(row.get("Chave NFS-e", "")).strip()
             num_nota = str(row.get("Número da NFS-e", "")).strip()
             fornecedor = limpar_nome_arquivo(row.get("Nome da Empresa", "FORNECEDOR"))
+            pasta_mes = extrair_pasta_mes_ano(row.get("Data Competência"))
 
             caminho_pdf_original = pdfs_mapeados.get(chave) or pdfs_mapeados.get(num_nota)
 
             if caminho_pdf_original and os.path.exists(caminho_pdf_original):
-                novo_nome = f"{fornecedor} - NF {num_nota}.pdf"
-                zip_out.write(caminho_pdf_original, arcname=novo_nome)
+                nome_pdf = f"{fornecedor} - NF {num_nota}.pdf"
+                # Cria a estrutura de pastas por mês/ano dentro do ZIP
+                caminho_no_zip = os.path.join(pasta_mes, nome_pdf)
+                zip_out.write(caminho_pdf_original, arcname=caminho_no_zip)
 
     zip_buffer.seek(0)
     return zip_buffer.getvalue() if zip_buffer.getbuffer().nbytes > 0 else None
@@ -615,7 +648,7 @@ if uploaded_files:
             st.session_state["df_extrato"] = df_nfse
             st.session_state["eventos_list"] = registros_eventos
 
-            # Mapeia os PDFs para o novo arquivo ZIP
+            # Mapeia os PDFs para o novo arquivo ZIP organizado por pastas mensais
             zip_pdf_bytes = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
             st.session_state["zip_pdf_bytes"] = zip_pdf_bytes
 
@@ -735,9 +768,9 @@ if (
         with col2:
             if zip_pdf_bytes:
                 st.download_button(
-                    label="📦 Baixar PDFs Renomeados (.zip)",
+                    label="📦 Baixar PDFs Organizados por Mês (.zip)",
                     data=zip_pdf_bytes,
-                    file_name="NFS_PDFs_Renomeados.zip",
+                    file_name="NFS_PDFs_Organizados_Mensal.zip",
                     mime="application/zip",
                 )
             else:
