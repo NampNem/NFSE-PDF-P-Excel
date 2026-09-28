@@ -19,7 +19,7 @@ st.set_page_config(
 
 st.title("📄 Extrator de NFS-e (XML) e Gerador Alterdata")
 st.write(
-    "Faça o upload dos arquivos **XML** (NFS-e ou Eventos de Cancelamento) ou de arquivos **ZIP** contendo os XMLs."
+    "Faça o upload dos arquivos **XML**, **PDF** ou de arquivos **ZIP** contendo os documentos."
 )
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
@@ -81,6 +81,11 @@ def converter_data_obj(data_str):
         return dt.date()
     except:
         return None
+
+
+def limpar_nome_arquivo(texto):
+    """Remove caracteres inválidos para nomes de arquivos no sistema operacional."""
+    return re.sub(r'[\\/*?:"<>|]', "", str(texto)).strip()
 
 
 # ============================================================
@@ -230,7 +235,7 @@ def extrair_xml(caminho_ou_conteudo):
         except ValueError:
             return default
 
-    # VERIFICAÇÃO: EVENTO DE CANCELAMENTO / SUBSTITUIÇÃO
+    # EVENTO DE CANCELAMENTO / SUBSTITUIÇÃO
     if root.tag.endswith("evento") or find_tag(root, "pedRegEvento") is not None:
         ch_nfse_original = get_text(root, "chNFSe")
         ch_substituta = get_text(root, "chSubstituta")
@@ -281,7 +286,6 @@ def extrair_xml(caminho_ou_conteudo):
     tp_ret_iss = get_text(root, "tpRetISSQN")
     iss_retido_flag = "Com Retenção" if tp_ret_iss == "2" else "Sem Retenção"
 
-    # Monta lista amigável de impostos retidos na nota
     impostos_retidos_lista = []
     if v_pis > 0:
         impostos_retidos_lista.append("PIS")
@@ -296,11 +300,11 @@ def extrair_xml(caminho_ou_conteudo):
     if tp_ret_iss == "2":
         impostos_retidos_lista.append("ISS")
 
-    if impostos_retidos_lista:
-        texto_retenções = "Retenção " + "/".join(impostos_retidos_lista)
-    else:
-        texto_retenções = "Sem Retenção"
-
+    texto_retenções = (
+        "Retenção " + "/".join(impostos_retidos_lista)
+        if impostos_retidos_lista
+        else "Sem Retenção"
+    )
     diferenca = round(v_serv - v_liq, 2)
 
     return {
@@ -460,7 +464,6 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
 # GERAR ABA DE NOTAS CANCELADAS E SUBSTITUÍDAS
 # ============================================================
 def gerar_aba_substituidas(eventos_list, df_nfse):
-    """Mapeia os dados das notas originais e substitutas com base nos eventos."""
     if not eventos_list:
         return pd.DataFrame()
 
@@ -496,19 +499,45 @@ def gerar_aba_substituidas(eventos_list, df_nfse):
 
 
 # ============================================================
+# RENOMEAR E EMPACOTAR PDFS
+# ============================================================
+def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
+    """Mapeia os PDFs pelo número/chave no XML e gera um ZIP com nomes padronizados."""
+    if not pdfs_mapeados or df_nfse.empty:
+        return None
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_out:
+        for _, row in df_nfse.iterrows():
+            chave = str(row.get("Chave NFS-e", "")).strip()
+            num_nota = str(row.get("Número da NFS-e", "")).strip()
+            fornecedor = limpar_nome_arquivo(row.get("Nome da Empresa", "FORNECEDOR"))
+
+            caminho_pdf_original = pdfs_mapeados.get(chave) or pdfs_mapeados.get(num_nota)
+
+            if caminho_pdf_original and os.path.exists(caminho_pdf_original):
+                novo_nome = f"{fornecedor} - NF {num_nota}.pdf"
+                zip_out.write(caminho_pdf_original, arcname=novo_nome)
+
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue() if zip_buffer.getbuffer().nbytes > 0 else None
+
+
+# ============================================================
 # INTERFACE STREAMLIT PRINCIPAL
 # ============================================================
 uploaded_files = st.file_uploader(
-    "Arraste ou selecione os arquivos XML ou ZIP aqui",
-    type=["xml", "zip"],
+    "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
+    type=["xml", "pdf", "zip"],
     accept_multiple_files=True,
 )
 
 if uploaded_files:
-    if st.button("🚀 Processar NFS-e (XML)"):
+    if st.button("🚀 Processar NFS-e"):
 
         temp_dir = tempfile.mkdtemp()
         xmls_para_processar = []
+        pdfs_encontrados = {}
 
         for uploaded_file in uploaded_files:
             nome_arquivo = uploaded_file.name
@@ -519,6 +548,13 @@ if uploaded_files:
                 with open(caminho_xml, "wb") as f:
                     f.write(uploaded_file.getbuffer())
                 xmls_para_processar.append(caminho_xml)
+
+            elif extensao == ".pdf":
+                caminho_pdf = os.path.join(temp_dir, nome_arquivo)
+                with open(caminho_pdf, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                nome_sem_ext = os.path.splitext(nome_arquivo)[0]
+                pdfs_encontrados[nome_sem_ext] = caminho_pdf
 
             elif extensao == ".zip":
                 caminho_zip = os.path.join(temp_dir, nome_arquivo)
@@ -536,10 +572,13 @@ if uploaded_files:
 
                     for raiz, _, arquivos in os.walk(pasta_zip):
                         for arq in arquivos:
-                            if arq.lower().endswith(".xml"):
-                                xmls_para_processar.append(
-                                    os.path.join(raiz, arq)
-                                )
+                            ext = os.path.splitext(arq)[1].lower()
+                            caminho_completo = os.path.join(raiz, arq)
+                            if ext == ".xml":
+                                xmls_para_processar.append(caminho_completo)
+                            elif ext == ".pdf":
+                                nome_sem_ext = os.path.splitext(arq)[0]
+                                pdfs_encontrados[nome_sem_ext] = caminho_completo
                 except Exception as e:
                     st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
 
@@ -576,6 +615,10 @@ if uploaded_files:
             st.session_state["df_extrato"] = df_nfse
             st.session_state["eventos_list"] = registros_eventos
 
+            # Mapeia os PDFs para o novo arquivo ZIP
+            zip_pdf_bytes = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
+            st.session_state["zip_pdf_bytes"] = zip_pdf_bytes
+
             mapa_tipo_servico_xml = {}
             if not df_nfse.empty:
                 for _, row in df_nfse.iterrows():
@@ -596,7 +639,7 @@ if uploaded_files:
 
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# EXIBIÇÃO DE RESULTADOS E MAPPING DE CÓDIGOS
+# EXIBIÇÃO DE RESULTADOS E MAPPINGS
 if (
     "df_extrato" in st.session_state
     and st.session_state["df_extrato"] is not None
@@ -606,6 +649,7 @@ if (
     eventos_list = st.session_state.get("eventos_list", [])
     ausentes = st.session_state.get("codigos_ausentes", [])
     mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
+    zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
 
     if ausentes:
         st.warning(
@@ -657,9 +701,10 @@ if (
             st.subheader("⚠️ Notas Canceladas e Substituídas Identificadas")
             st.dataframe(df_substituidas, use_container_width=True)
 
-        buffer = io.BytesIO()
+        # Monta a planilha Excel em memória
+        buffer_excel = io.BytesIO()
         with pd.ExcelWriter(
-            buffer, engine="openpyxl", date_format="dd/mm/yyyy"
+            buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy"
         ) as writer:
             df_alterdata.to_excel(writer, index=False, sheet_name="Alterdata")
             df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
@@ -674,9 +719,26 @@ if (
                 cell = ws.cell(row=row, column=1)
                 cell.number_format = "dd/mm/yyyy"
 
-        st.download_button(
-            label="📥 Baixar Planilha para Importação Alterdata (.xlsx)",
-            data=buffer.getvalue(),
-            file_name="importacao_alterdata.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        # INTERFACE COM OS 2 BOTÕES DE DOWNLOAD
+        st.markdown("---")
+        st.subheader("📥 Downloads Disponíveis")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.download_button(
+                label="📊 Baixar Planilha Alterdata (.xlsx)",
+                data=buffer_excel.getvalue(),
+                file_name="importacao_alterdata.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+        with col2:
+            if zip_pdf_bytes:
+                st.download_button(
+                    label="📦 Baixar PDFs Renomeados (.zip)",
+                    data=zip_pdf_bytes,
+                    file_name="NFS_PDFs_Renomeados.zip",
+                    mime="application/zip",
+                )
+            else:
+                st.info("Nenhum arquivo PDF correspondente encontrado no lote.")
