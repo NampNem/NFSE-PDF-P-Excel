@@ -627,7 +627,7 @@ def gerar_txt_dominio(df_dominio, lote_inicial=1):
     Layout Domínio: Data;Débito;Crédito;Valor;Histórico;Lote;;;
     - Linha só com débito   -> abre o múltiplo e recebe o próximo nº de lote
     - Linhas só com crédito -> continuam o múltiplo (lote vazio)
-    - Linha com débito e crédito -> lançamento simples (lote vazio)
+    - Linha com débito e crédito -> lançamento simples, também recebe o próximo nº de lote
     """
 
     def limpo(v):
@@ -650,10 +650,13 @@ def gerar_txt_dominio(df_dominio, lote_inicial=1):
 
         hist = limpo(r.get("descrição")).replace(";", " ")
 
-        if deb and not cred:
+        if deb:
+            # Toda linha com débito recebe um novo nº de lote
+            # (abre o múltiplo OU é um lançamento simples)
             lote += 1
             lote_txt = str(lote)
         else:
+            # Linhas só com crédito continuam o múltiplo (sem lote)
             lote_txt = ""
 
         linhas.append(f"{data_txt};{deb};{cred};{valor_txt};{hist};{lote_txt};;;")
