@@ -18,12 +18,36 @@ st.set_page_config(
     page_title="Extrator de NFS-e (XML)", page_icon="📄", layout="wide"
 )
 
-st.title("📄 Extrator de NFS-e (XML) e Gerador Alterdata")
+st.title("📄 Extrator de NFS-e (XML) e Gerador Alterdata / Domínio")
 st.write(
     "Faça o upload dos arquivos **XML**, **PDF** ou de arquivos **ZIP** contendo os documentos."
 )
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
+
+# ============================================================
+# CONTAS FIXAS POR SISTEMA
+# ============================================================
+CONTAS = {
+    "alterdata": {
+        "debito_padrao": "2135",   # usada quando o código não tem conta no banco
+        "credito_principal": "708",
+        "pcc": "236",              # PIS / COFINS / CSLL
+        "irrf": "763",
+        "inss": "834",
+        "iss": "3332",
+    },
+    "dominio": {
+        "debito_padrao": "325",
+        "credito_principal": "3907",
+        "pcc": "3924",             # PIS / COFINS / CSLL
+        "irrf": "178",
+        "inss": "184",
+        "iss": "183",
+    },
+}
+
+NOMES_MODO = {"alterdata": "Alterdata", "dominio": "Domínio"}
 
 
 # ============================================================
@@ -55,6 +79,21 @@ def montar_celula_banco(codigo, descricao):
     if descricao:
         return f"{codigo} - {descricao}"
     return codigo
+
+
+def limpar_conta(valor):
+    """Converte o valor de uma célula de conta em texto limpo (2135.0 -> 2135)."""
+    if valor is None:
+        return ""
+    try:
+        if pd.isna(valor):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    texto = str(valor).strip()
+    if re.match(r"^\d+\.0$", texto):
+        texto = texto[:-2]
+    return "" if texto.lower() == "nan" else texto
 
 
 def converter_valor(valor):
@@ -107,6 +146,23 @@ def limpar_nome_arquivo(texto):
     return re.sub(r'[\\/*?:"<>|]', "", str(texto)).strip()
 
 
+def conta_debito_do_banco(mapa, cod, modo):
+    """Devolve a conta débito do banco para o sistema escolhido (ou a padrão)."""
+    chave = "conta_dominio" if modo == "dominio" else "conta"
+    valor = str(mapa.get(cod, {}).get(chave, "") or "").strip()
+    return valor or CONTAS[modo]["debito_padrao"]
+
+
+def codigo_precisa_cadastro(mapa, cod, modo):
+    """Alterdata: só se o código não existe. Domínio: também se faltar a conta Domínio."""
+    dados = mapa.get(cod)
+    if dados is None:
+        return True
+    if modo == "dominio":
+        return not str(dados.get("conta_dominio", "") or "").strip()
+    return False
+
+
 # ============================================================
 # VALIDAÇÃO DE RETENÇÕES POR CÁLCULO
 # ============================================================
@@ -148,6 +204,11 @@ def validar_retencoes(v_serv, v_liq, impostos, tol=0.02):
 # GERENCIAMENTO DO BANCO DE DADOS (GITHUB)
 # ============================================================
 def carregar_banco_dados_github():
+    """
+    Estrutura do banco (3 colunas, sem cabeçalho):
+      A: 'CÓDIGO - Descrição' | B: conta débito Alterdata | C: conta débito Domínio
+    Bancos antigos com 2 colunas continuam funcionando (Domínio fica em branco).
+    """
     mapa = {}
     if os.path.exists(NOME_BANCO_DADOS):
         try:
@@ -157,11 +218,16 @@ def carregar_banco_dados_github():
                 df_bd = pd.read_excel(NOME_BANCO_DADOS, header=None)
 
             for _, r in df_bd.iterrows():
-                cod = extrair_codigo_do_banco(r[0])
-                descricao = extrair_descricao_do_banco(r[0])
-                conta = str(r[1]).strip() if pd.notna(r[1]) else ""
+                cod = extrair_codigo_do_banco(r.iloc[0])
+                descricao = extrair_descricao_do_banco(r.iloc[0])
+                conta = limpar_conta(r.iloc[1]) if len(r) > 1 else ""
+                conta_dom = limpar_conta(r.iloc[2]) if len(r) > 2 else ""
                 if cod:
-                    mapa[cod] = {"descricao": descricao, "conta": conta}
+                    mapa[cod] = {
+                        "descricao": descricao,
+                        "conta": conta,
+                        "conta_dominio": conta_dom,
+                    }
         except Exception as e:
             st.error(f"Erro ao carregar o Banco de Dados: {e}")
     return mapa
@@ -169,7 +235,11 @@ def carregar_banco_dados_github():
 
 def salvar_banco_dados_github(mapa):
     linhas = [
-        (montar_celula_banco(cod, dados.get("descricao", "")), dados.get("conta", ""))
+        (
+            montar_celula_banco(cod, dados.get("descricao", "")),
+            dados.get("conta", ""),
+            dados.get("conta_dominio", ""),
+        )
         for cod, dados in mapa.items()
     ]
     df_bd = pd.DataFrame(linhas)
@@ -212,23 +282,30 @@ def salvar_banco_dados_github(mapa):
 # ============================================================
 # GERENCIADOR NA BARRA LATERAL (SIDEBAR)
 # ============================================================
+COL_COD = "Código Tributação"
+COL_DESC = "Descrição (Operação)"
+COL_ALT = "Conta Débito Alterdata"
+COL_DOM = "Conta Débito Domínio"
+
 with st.sidebar:
     st.header("⚙️ Gerenciar Banco de Dados")
     st.write(
-        "Modifique, adicione ou remova códigos de tributação e suas contas contábeis vinculadas."
+        "Modifique, adicione ou remova códigos de tributação e as contas contábeis "
+        "vinculadas (uma coluna para o Alterdata e outra para o Domínio)."
     )
 
     mapa_atual = carregar_banco_dados_github()
     df_gerenciador = pd.DataFrame(
         [
             {
-                "Código Tributação": cod,
-                "Descrição (Operação)": dados.get("descricao", ""),
-                "Conta Débito": dados.get("conta", ""),
+                COL_COD: cod,
+                COL_DESC: dados.get("descricao", ""),
+                COL_ALT: dados.get("conta", ""),
+                COL_DOM: dados.get("conta_dominio", ""),
             }
             for cod, dados in mapa_atual.items()
         ],
-        columns=["Código Tributação", "Descrição (Operação)", "Conta Débito"],
+        columns=[COL_COD, COL_DESC, COL_ALT, COL_DOM],
     )
 
     df_editado = st.data_editor(
@@ -241,19 +318,22 @@ with st.sidebar:
     if st.button("💾 Salvar Alterações no Banco de Dados"):
         novo_mapa = {}
         for _, row in df_editado.iterrows():
-            cod = extrair_codigo_do_banco(str(row["Código Tributação"]))
+            # Ignora linhas em branco (evita gravar "None" / "nan" como código)
+            if pd.isna(row[COL_COD]) or not str(row[COL_COD]).strip():
+                continue
+
+            cod = extrair_codigo_do_banco(str(row[COL_COD]))
             descricao = (
-                str(row["Descrição (Operação)"]).strip()
-                if pd.notna(row["Descrição (Operação)"])
-                else ""
+                str(row[COL_DESC]).strip() if pd.notna(row[COL_DESC]) else ""
             )
-            conta = (
-                str(row["Conta Débito"]).strip()
-                if pd.notna(row["Conta Débito"])
-                else ""
-            )
+            conta = limpar_conta(row[COL_ALT])
+            conta_dom = limpar_conta(row[COL_DOM])
             if cod:
-                novo_mapa[cod] = {"descricao": descricao, "conta": conta}
+                novo_mapa[cod] = {
+                    "descricao": descricao,
+                    "conta": conta,
+                    "conta_dominio": conta_dom,
+                }
 
         salvar_banco_dados_github(novo_mapa)
         st.rerun()
@@ -412,9 +492,15 @@ def extrair_xml(caminho_ou_conteudo):
 
 
 # ============================================================
-# GERAR ABA ALTERDATA
+# GERAR LANÇAMENTOS (ALTERDATA OU DOMÍNIO)
 # ============================================================
-def gerar_aba_alterdata(df_extrato, mapa_contas):
+def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata"):
+    """
+    Gera os lançamentos contábeis. O layout das linhas é o mesmo nos dois
+    sistemas; o que muda são as contas (ver dicionário CONTAS e a coluna
+    de conta débito do banco de dados).
+    """
+    contas = CONTAS[modo]
     linhas_alterdata = []
 
     for _, row in df_extrato.iterrows():
@@ -423,7 +509,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
 
-        conta_debito_bd = mapa_contas.get(cod_trib, {}).get("conta", "2135")
+        conta_debito_bd = conta_debito_do_banco(mapa_contas, cod_trib, modo)
         desc_padrao = f"NF - {num_nota} {nome_empresa}".strip()
 
         val_bruto = converter_valor(row.get("Valor do Serviço")) or 0.0
@@ -442,7 +528,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
             linhas_alterdata.append({
                 "Data": data_comp,
                 "debito": conta_debito_bd,
-                "credito": "708",
+                "credito": contas["credito_principal"],
                 "valor": val_bruto,
                 "documento": num_nota,
                 "historico": 99,
@@ -477,7 +563,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
-                    "credito": "236",
+                    "credito": contas["pcc"],
                     "valor": soma_pcc,
                     "documento": num_nota,
                     "historico": 99,
@@ -489,7 +575,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
-                    "credito": "763",
+                    "credito": contas["irrf"],
                     "valor": val_irrf,
                     "documento": num_nota,
                     "historico": 99,
@@ -501,7 +587,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
-                    "credito": "834",
+                    "credito": contas["inss"],
                     "valor": val_inss,
                     "documento": num_nota,
                     "historico": 99,
@@ -513,7 +599,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
-                    "credito": "3332",
+                    "credito": contas["iss"],
                     "valor": val_iss,
                     "documento": num_nota,
                     "historico": 99,
@@ -523,7 +609,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
             linhas_alterdata.append({
                 "Data": data_comp,
                 "debito": "",
-                "credito": "708",
+                "credito": contas["credito_principal"],
                 "valor": val_liquido,
                 "documento": num_nota,
                 "historico": 99,
@@ -531,6 +617,49 @@ def gerar_aba_alterdata(df_extrato, mapa_contas):
             })
 
     return pd.DataFrame(linhas_alterdata)
+
+
+# ============================================================
+# GERAR TXT DOMÍNIO
+# ============================================================
+def gerar_txt_dominio(df_dominio, lote_inicial=1):
+    """
+    Layout Domínio: Data;Débito;Crédito;Valor;Histórico;Lote;;;
+    - Linha só com débito   -> abre o múltiplo e recebe o próximo nº de lote
+    - Linhas só com crédito -> continuam o múltiplo (lote vazio)
+    - Linha com débito e crédito -> lançamento simples (lote vazio)
+    """
+
+    def limpo(v):
+        if v is None or (not isinstance(v, str) and pd.isna(v)):
+            return ""
+        return str(v).strip()
+
+    linhas = []
+    lote = int(lote_inicial) - 1
+
+    for _, r in df_dominio.iterrows():
+        deb = limpo(r.get("debito"))
+        cred = limpo(r.get("credito"))
+
+        data = r.get("Data")
+        data_txt = data.strftime("%d/%m/%Y") if hasattr(data, "strftime") else ""
+
+        valor = converter_valor(r.get("valor")) or 0.0
+        valor_txt = f"{valor:.2f}".replace(".", ",")
+
+        hist = limpo(r.get("descrição")).replace(";", " ")
+
+        if deb and not cred:
+            lote += 1
+            lote_txt = str(lote)
+        else:
+            lote_txt = ""
+
+        linhas.append(f"{data_txt};{deb};{cred};{valor_txt};{hist};{lote_txt};;;")
+
+    conteudo = "\r\n".join(linhas) + "\r\n"
+    return conteudo.encode("cp1252", errors="replace")
 
 
 # ============================================================
@@ -624,7 +753,15 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    if st.button("🚀 Processar NFS-e"):
+    col_btn1, col_btn2, _ = st.columns([1, 1, 2])
+    with col_btn1:
+        processar_alterdata = st.button("🚀 Processar para Alterdata")
+    with col_btn2:
+        processar_dominio = st.button("🚀 Processar para Domínio")
+
+    if processar_alterdata or processar_dominio:
+        modo_escolhido = "dominio" if processar_dominio else "alterdata"
+        st.session_state["modo"] = modo_escolhido
 
         temp_dir = tempfile.mkdtemp()
         xmls_para_processar = []
@@ -744,7 +881,11 @@ if uploaded_files:
             mapa_contas = carregar_banco_dados_github()
             if not df_nfse.empty:
                 codigos_na_nf = set(df_nfse["Código Tributação"].dropna().unique())
-                ausentes = [c for c in codigos_na_nf if c and c not in mapa_contas]
+                ausentes = [
+                    c
+                    for c in codigos_na_nf
+                    if c and codigo_precisa_cadastro(mapa_contas, c, modo_escolhido)
+                ]
             else:
                 ausentes = []
 
@@ -757,6 +898,9 @@ if (
     "df_extrato" in st.session_state
     and st.session_state["df_extrato"] is not None
 ):
+    modo = st.session_state.get("modo", "alterdata")
+    nome_modo = NOMES_MODO[modo]
+
     mapa_contas = carregar_banco_dados_github()
     df = st.session_state["df_extrato"]
     eventos_list = st.session_state.get("eventos_list", [])
@@ -764,24 +908,31 @@ if (
     mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
     zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
 
+    st.info(f"Modo de processamento: **{nome_modo}**")
+
     if ausentes:
         st.warning(
-            "⚠️ Foram encontrados Códigos de Tributação não cadastrados no Banco de Dados!"
+            f"⚠️ Foram encontrados Códigos de Tributação sem conta {nome_modo} "
+            "cadastrada no Banco de Dados!"
         )
+
+        conta_padrao = CONTAS[modo]["debito_padrao"]
 
         with st.form("form_novos_codigos"):
             novos_cadastros = {}
             for cod in ausentes:
-                descricao_para_salvar = mapa_tipo_servico_xml.get(
-                    cod, "Descrição do Serviço"
+                descricao_para_salvar = (
+                    mapa_contas.get(cod, {}).get("descricao")
+                    or mapa_tipo_servico_xml.get(cod, "Descrição do Serviço")
                 )
 
                 st.markdown(f"### 📌 Código: `{cod}`")
                 st.info(f"📄 **Descrição do XML:** {cod} - {descricao_para_salvar}")
 
                 nova_conta = st.text_input(
-                    f"Informe a conta débito para o código {cod} (deixe em branco para usar 2135):",
-                    key=f"input_{cod}",
+                    f"Informe a conta débito {nome_modo} para o código {cod} "
+                    f"(deixe em branco para usar {conta_padrao}):",
+                    key=f"input_{modo}_{cod}",
                 )
                 novos_cadastros[cod] = {
                     "descricao": descricao_para_salvar,
@@ -793,22 +944,29 @@ if (
 
         if salvar_btn:
             for cod, dados in novos_cadastros.items():
-                conta_informada = dados["conta"].strip()
-                mapa_contas[cod] = {
-                    "descricao": dados["descricao"],
-                    "conta": conta_informada if conta_informada else "2135",
-                }
+                conta_informada = dados["conta"].strip() or conta_padrao
+                existente = mapa_contas.get(
+                    cod, {"descricao": dados["descricao"], "conta": "", "conta_dominio": ""}
+                )
+                existente["descricao"] = existente.get("descricao") or dados["descricao"]
+                if modo == "dominio":
+                    existente["conta_dominio"] = conta_informada
+                else:
+                    existente["conta"] = conta_informada
+                mapa_contas[cod] = existente
 
             salvar_banco_dados_github(mapa_contas)
             st.session_state["codigos_ausentes"] = []
             st.success("Contas atualizadas com sucesso!")
 
     if not st.session_state.get("codigos_ausentes"):
-        df_alterdata = gerar_aba_alterdata(df, mapa_contas)
+        df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo)
         df_substituidas = gerar_aba_substituidas(eventos_list, df)
 
-        st.subheader("📊 Prévia - Aba Alterdata")
-        st.dataframe(df_alterdata, use_container_width=True)
+        nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
+
+        st.subheader(f"📊 Prévia - Aba {nome_aba}")
+        st.dataframe(df_lancamentos, use_container_width=True)
 
         if not df_substituidas.empty:
             st.subheader("⚠️ Notas Canceladas e Substituídas Identificadas")
@@ -819,7 +977,7 @@ if (
         with pd.ExcelWriter(
             buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy"
         ) as writer:
-            df_alterdata.to_excel(writer, index=False, sheet_name="Alterdata")
+            df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
             df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
 
             if not df_substituidas.empty:
@@ -827,31 +985,68 @@ if (
                     writer, index=False, sheet_name="Notas Canceladas e Substituídas"
                 )
 
-            ws = writer.sheets["Alterdata"]
+            ws = writer.sheets[nome_aba]
             for row in range(2, ws.max_row + 1):
                 cell = ws.cell(row=row, column=1)
                 cell.number_format = "dd/mm/yyyy"
 
-        # INTERFACE COM OS 2 BOTÕES DE DOWNLOAD
+        # DOWNLOADS
         st.markdown("---")
         st.subheader("📥 Downloads Disponíveis")
-        col1, col2 = st.columns(2)
 
-        with col1:
-            st.download_button(
-                label="📊 Baixar Planilha Alterdata (.xlsx)",
-                data=buffer_excel.getvalue(),
-                file_name="importacao_alterdata.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        if modo == "dominio":
+            lote_inicial = st.number_input(
+                "Nº do primeiro lote (Domínio)", min_value=1, value=1, step=1
             )
+            txt_dominio = gerar_txt_dominio(df_lancamentos, lote_inicial)
 
-        with col2:
-            if zip_pdf_bytes:
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
                 st.download_button(
-                    label="📦 Baixar PDFs Organizados por Mês (.zip)",
-                    data=zip_pdf_bytes,
-                    file_name="NFS_PDFs_Organizados_Mensal.zip",
-                    mime="application/zip",
+                    label="📄 Baixar Layout Domínio (.txt)",
+                    data=txt_dominio,
+                    file_name="importacao_dominio.txt",
+                    mime="text/plain",
                 )
-            else:
-                st.info("Nenhum arquivo PDF correspondente encontrado no lote.")
+
+            with col2:
+                st.download_button(
+                    label="📊 Baixar Planilha Domínio (.xlsx)",
+                    data=buffer_excel.getvalue(),
+                    file_name="importacao_dominio.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+            with col3:
+                if zip_pdf_bytes:
+                    st.download_button(
+                        label="📦 Baixar PDFs Organizados por Mês (.zip)",
+                        data=zip_pdf_bytes,
+                        file_name="NFS_PDFs_Organizados_Mensal.zip",
+                        mime="application/zip",
+                    )
+                else:
+                    st.info("Nenhum arquivo PDF correspondente encontrado no lote.")
+
+        else:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.download_button(
+                    label="📊 Baixar Planilha Alterdata (.xlsx)",
+                    data=buffer_excel.getvalue(),
+                    file_name="importacao_alterdata.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+            with col2:
+                if zip_pdf_bytes:
+                    st.download_button(
+                        label="📦 Baixar PDFs Organizados por Mês (.zip)",
+                        data=zip_pdf_bytes,
+                        file_name="NFS_PDFs_Organizados_Mensal.zip",
+                        mime="application/zip",
+                    )
+                else:
+                    st.info("Nenhum arquivo PDF correspondente encontrado no lote.")
