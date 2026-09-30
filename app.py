@@ -40,7 +40,7 @@ CONTAS = {
     "dominio": {
         "debito_padrao": "325",
         "credito_principal": "3907",
-        "pcc": "3924",             # PIS / COFINS / CSLL
+        "pcc": "647",             # PIS / COFINS / CSLL
         "irrf": "178",
         "inss": "184",
         "iss": "183",
