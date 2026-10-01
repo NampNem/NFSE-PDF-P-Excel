@@ -26,7 +26,8 @@ st.write(
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
 
 # ============================================================
-# CONTAS FIXAS POR SISTEMA
+# CONTAS FIXAS POR SISTEMA (valores padrão)
+# Estes valores aparecem pré-preenchidos nos campos da tela.
 # ============================================================
 CONTAS = {
     "alterdata": {
@@ -494,13 +495,16 @@ def extrair_xml(caminho_ou_conteudo):
 # ============================================================
 # GERAR LANÇAMENTOS (ALTERDATA OU DOMÍNIO)
 # ============================================================
-def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata"):
+def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
     """
     Gera os lançamentos contábeis. O layout das linhas é o mesmo nos dois
-    sistemas; o que muda são as contas (ver dicionário CONTAS e a coluna
-    de conta débito do banco de dados).
+    sistemas; o que muda são as contas.
+
+    contas: dicionário com as contas dos impostos retidos (as que o usuário
+    pode alterar na tela). Se não for informado, usa as contas padrão
+    do dicionário CONTAS.
     """
-    contas = CONTAS[modo]
+    contas = contas or CONTAS[modo]
     linhas_alterdata = []
 
     for _, row in df_extrato.iterrows():
@@ -963,7 +967,39 @@ if (
             st.success("Contas atualizadas com sucesso!")
 
     if not st.session_state.get("codigos_ausentes"):
-        df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo)
+
+        # ----------------------------------------------------
+        # CONTAS DOS IMPOSTOS RETIDOS (EDITÁVEIS ANTES DE GERAR)
+        # Já vêm preenchidas com os valores padrão do dicionário CONTAS.
+        # ----------------------------------------------------
+        st.subheader(f"🧾 Contas dos impostos retidos - {nome_modo}")
+        st.caption(
+            "Já vêm preenchidas com as contas padrão. Altere se necessário "
+            "(campo em branco volta para a conta padrão). "
+            "A prévia e os arquivos abaixo usam as contas informadas aqui."
+        )
+
+        padrao = CONTAS[modo]
+        campos_contas = [
+            ("credito_principal", "Fornecedores (crédito)"),
+            ("pcc", "PIS / COFINS / CSLL"),
+            ("irrf", "IRRF"),
+            ("inss", "INSS"),
+            ("iss", "ISS"),
+        ]
+
+        contas_editadas = dict(padrao)  # mantém também o debito_padrao
+        colunas_contas = st.columns(len(campos_contas))
+        for coluna, (chave, rotulo) in zip(colunas_contas, campos_contas):
+            with coluna:
+                valor_digitado = st.text_input(
+                    rotulo,
+                    value=padrao[chave],
+                    key=f"conta_{modo}_{chave}",  # separado por sistema
+                )
+                contas_editadas[chave] = valor_digitado.strip() or padrao[chave]
+
+        df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo, contas_editadas)
         df_substituidas = gerar_aba_substituidas(eventos_list, df)
 
         nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
