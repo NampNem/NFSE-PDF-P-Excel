@@ -3,10 +3,10 @@ import streamlit as st
 # ============================================================
 # EMPRESAS
 # Tela com os sistemas de cada empresa. Cada botão abre um sistema
-# que fica em um arquivo próprio (ex.: extratos.py).
+# que fica em um arquivo próprio (ex.: costa_verde_extratos.py).
 #
 # Para adicionar um novo item aqui:
-#   1) crie o arquivo do sistema (ex.: contas_pagar.py) com uma função pagina_xxx()
+#   1) crie o arquivo do sistema (ex.: empresa_x_extratos.py) com uma função pagina_xxx()
 #   2) coloque um botão em lista_empresas()
 #   3) acrescente um bloco "elif" em pagina_empresas()
 # ============================================================
@@ -35,7 +35,7 @@ def pagina_empresas():
             st.session_state["empresa_pagina"] = "lista"
             st.rerun()
 
-        from extratos import pagina_extratos
-        pagina_extratos()
+        from costa_verde_extratos import pagina_costa_verde_extratos
+        pagina_costa_verde_extratos()
     else:
         lista_empresas()
