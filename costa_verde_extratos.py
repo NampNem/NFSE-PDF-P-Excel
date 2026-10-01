@@ -12,7 +12,7 @@ import streamlit as st
 # ============================================================
 
 def consultar_cnpj(cnpj_limpo):
-"""Consulta Razão Social via BrasilAPI com fallback e cache local."""
+"""Consulta Razão Social via BrasilAPI com fallback e cache."""
 
 ```
 import requests
@@ -29,6 +29,7 @@ try:
     response = requests.get(url, timeout=3)
 
     if response.status_code == 200:
+
         data = response.json()
 
         nome = (
@@ -49,13 +50,21 @@ st.session_state.cnpj_cache[cnpj_limpo] = cnpj_limpo
 return cnpj_limpo
 ```
 
-def tratar_descricao_com_cnpj(tipo_transacao, texto_complementar=""):
-"""
-Localiza CNPJ e, quando houver, tenta buscar a razão social.
-"""
+# ============================================================
+
+# TRATAMENTO DE CNPJ
+
+# ============================================================
+
+def tratar_descricao_com_cnpj(
+tipo_transacao,
+texto_complementar=""
+):
 
 ```
-texto_completo = f"{tipo_transacao} {texto_complementar}".strip()
+texto_completo = (
+    f"{tipo_transacao} {texto_complementar}"
+).strip()
 
 cnpjs = re.findall(
     r'\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b',
@@ -140,9 +149,9 @@ conta = (
 )
 
 linhas = [
-    l.strip()
-    for l in texto_completo.splitlines()
-    if l.strip()
+    linha.strip()
+    for linha in texto_completo.splitlines()
+    if linha.strip()
 ]
 
 dados = []
@@ -156,11 +165,11 @@ saldos_informativos = [
     "SALDO APLIC. AUT."
 ]
 
-for line in linhas:
+for linha in linhas:
 
     match_data = re.match(
         r'^(\d{2}/\d{2}/\d{4})\s+(.+)$',
-        line
+        linha
     )
 
     if not match_data:
@@ -171,40 +180,40 @@ for line in linhas:
     resto = match_data.group(2).strip()
 
     if any(
-        term in resto.upper()
-        for term in saldos_informativos
+        termo in resto.upper()
+        for termo in saldos_informativos
     ):
         continue
 
     match_valor = re.search(
-        r'([-\+]?\s*[\d\.]+\,\d{2})$',
+        r'([-\+]?\s*[\d\.]+,\d{2})$',
         resto
     )
 
     if not match_valor:
         continue
 
-    valor_str = (
+    valor = (
         match_valor.group(1)
         .replace(" ", "")
     )
 
-    desc = (
+    descricao = (
         resto[:match_valor.start()]
         .strip()
     )
 
-    if not desc:
+    if not descricao:
         continue
 
-    desc_final = tratar_descricao_com_cnpj(
-        desc
+    descricao = tratar_descricao_com_cnpj(
+        descricao
     )
 
     dados.append({
         "DATA": data,
-        "VALOR": valor_str,
-        "DESCRIÇÃO": desc_final
+        "VALOR": valor,
+        "DESCRIÇÃO": descricao
     })
 
 return (
@@ -224,27 +233,208 @@ return (
 
 # ============================================================
 
-# CORA
+# CORA - FUNÇÕES AUXILIARES
+
+# ============================================================
+
+def limpar_linha_cora(linha):
+
+```
+if not linha:
+    return ""
+
+linha = linha.replace("\xa0", " ")
+
+linha = re.sub(
+    r'^\s*\|\s*',
+    '',
+    linha
+)
+
+linha = re.sub(
+    r'\s*\|\s*$',
+    '',
+    linha
+)
+
+linha = re.sub(
+    r'\s+',
+    ' ',
+    linha
+)
+
+return linha.strip()
+```
+
+def valor_cora_para_string(numero, sinal):
+
+```
+numero = numero.replace(
+    " ",
+    ""
+)
+
+if sinal == "-":
+    return f"-{numero}"
+
+return numero
+```
+
+def procurar_valor_cora(linha):
+
+```
+"""
+Aceita vários formatos encontrados em PDFs da Cora:
+
+- R$ 100,00
++ R$ 100,00
+- R$ 100,00
+R$ - 100,00
+R$ + 100,00
+100,00
+-100,00
++100,00
+"""
+
+padroes = [
+
+    # - R$ 100,00
+    r'([+-])\s*R\$\s*([\d\.]+,\d{2})\s*$',
+
+    # R$ - 100,00
+    r'R\$\s*([+-])\s*([\d\.]+,\d{2})\s*$',
+
+    # R$100,00
+    r'R\$\s*([\d\.]+,\d{2})\s*$',
+
+    # -100,00 / +100,00
+    r'([+-])\s*([\d\.]+,\d{2})\s*$',
+
+    # valor sem sinal
+    r'([\d\.]+,\d{2})\s*$'
+]
+
+for indice, padrao in enumerate(padroes):
+
+    resultado = re.search(
+        padrao,
+        linha
+    )
+
+    if not resultado:
+        continue
+
+    if indice == 0:
+
+        sinal = resultado.group(1)
+        numero = resultado.group(2)
+
+        return (
+            resultado,
+            valor_cora_para_string(
+                numero,
+                sinal
+            )
+        )
+
+    if indice == 1:
+
+        sinal = resultado.group(1)
+        numero = resultado.group(2)
+
+        return (
+            resultado,
+            valor_cora_para_string(
+                numero,
+                sinal
+            )
+        )
+
+    if indice == 2:
+
+        numero = resultado.group(1)
+
+        return (
+            resultado,
+            numero
+        )
+
+    if indice == 3:
+
+        sinal = resultado.group(1)
+        numero = resultado.group(2)
+
+        return (
+            resultado,
+            valor_cora_para_string(
+                numero,
+                sinal
+            )
+        )
+
+    if indice == 4:
+
+        numero = resultado.group(1)
+
+        return (
+            resultado,
+            numero
+        )
+
+return None, None
+```
+
+def eh_linha_saldo_ou_total_cora(linha):
+
+```
+texto = linha.upper()
+
+termos = [
+
+    "SALDO DO DIA",
+    "SALDO INICIAL",
+    "SALDO FINAL",
+    "SALDO ANTERIOR",
+    "SALDO DISPONÍVEL",
+    "SALDO DISPONIVEL",
+
+    "TOTAL DE ENTRADAS",
+    "TOTAL DE SAÍDAS",
+    "TOTAL DE SAIDAS",
+
+    "MOVIMENTAÇÃO DO DIA",
+    "MOVIMENTACAO DO DIA"
+]
+
+return any(
+    termo in texto
+    for termo in termos
+)
+```
+
+def extrair_data_cora(linha):
+
+```
+resultado = re.search(
+    r'\b(\d{2}/\d{2}/\d{4})\b',
+    linha
+)
+
+if resultado:
+    return resultado.group(1)
+
+return None
+```
+
+# ============================================================
+
+# CORA - MÉTODO PRINCIPAL
 
 # ============================================================
 
 def parse_cora(texto_completo):
 
 ```
-"""
-Processador do Banco Cora.
-
-Mantém a última data encontrada mesmo quando uma
-página nova começa diretamente com uma movimentação.
-
-Exemplos aceitos:
-
-31/08/2026 Saldo do dia R$ 13.804,06
-31/08/2026 Compra no débito LOJA X - R$ 28,00
-Pgto Pix recebido EMPRESA X + R$ 500,00
-Transf Pix enviada EMPRESA Y - R$ 100,00
-"""
-
 # --------------------------------------------------------
 # AGÊNCIA
 # --------------------------------------------------------
@@ -278,170 +468,161 @@ conta = (
 )
 
 # --------------------------------------------------------
-# NORMALIZAÇÃO DAS LINHAS
+# LINHAS
 # --------------------------------------------------------
 
 linhas = []
 
 for linha in texto_completo.splitlines():
 
-    linha = linha.strip()
-
-    if not linha:
-        continue
-
-    # Remove barras usadas pelo PDF
-    linha = re.sub(
-        r'^\s*\|\s*',
-        '',
+    linha = limpar_linha_cora(
         linha
     )
-
-    linha = re.sub(
-        r'\s*\|\s*$',
-        '',
-        linha
-    )
-
-    # Junta espaços duplicados
-    linha = re.sub(
-        r'\s+',
-        ' ',
-        linha
-    ).strip()
 
     if linha:
-        linhas.append(linha)
-
-# --------------------------------------------------------
-# PADRÕES
-# --------------------------------------------------------
-
-padrao_data = re.compile(
-    r'^(\d{2}/\d{2}/\d{4})\b'
-)
-
-padrao_valor = re.compile(
-    r'([+-])\s*R\$\s*([\d\.]+,\d{2})\s*$'
-)
-
-dados = []
-
-data_atual = None
-
-termos_ignorar = [
-    "SALDO DO DIA",
-    "SALDO INICIAL",
-    "SALDO FINAL",
-    "TOTAL DE ENTRADAS",
-    "TOTAL DE SAÍDAS",
-    "TOTAL DE SAIDAS",
-    "SALDO ANTERIOR",
-    "SALDO DISPONÍVEL",
-    "SALDO DISPONIVEL"
-]
+        linhas.append(
+            linha
+        )
 
 # --------------------------------------------------------
 # PROCESSAMENTO
 # --------------------------------------------------------
 
-for linha in linhas:
+dados = []
 
-    linha_upper = linha.upper()
+data_atual = None
 
-    # --------------------------------------------
-    # Se a linha começar com uma data,
-    # atualiza a data atual
-    # --------------------------------------------
+i = 0
 
-    match_data = padrao_data.match(
+while i < len(linhas):
+
+    linha = linhas[i]
+
+    # ----------------------------------------------------
+    # ATUALIZA DATA
+    # ----------------------------------------------------
+
+    nova_data = extrair_data_cora(
         linha
     )
 
-    if match_data:
+    if nova_data:
+        data_atual = nova_data
 
-        data_atual = match_data.group(1)
+    # ----------------------------------------------------
+    # SEM DATA AINDA
+    # ----------------------------------------------------
 
-    # Sem data ainda, não há como lançar
     if not data_atual:
+        i += 1
         continue
 
-    # --------------------------------------------
-    # Procura valor no final da linha
-    # --------------------------------------------
+    # ----------------------------------------------------
+    # IGNORA SALDOS / TOTAIS
+    # ----------------------------------------------------
 
-    match_valor = padrao_valor.search(
+    if eh_linha_saldo_ou_total_cora(
+        linha
+    ):
+        i += 1
+        continue
+
+    # ----------------------------------------------------
+    # TENTA ENCONTRAR VALOR NA PRÓPRIA LINHA
+    # ----------------------------------------------------
+
+    match_valor, valor = procurar_valor_cora(
         linha
     )
 
-    if not match_valor:
+    if match_valor:
+
+        descricao = (
+            linha[:match_valor.start()]
+            .strip()
+        )
+
+        descricao = re.sub(
+            r'^\d{2}/\d{2}/\d{4}\s*',
+            '',
+            descricao
+        ).strip()
+
+        if descricao:
+
+            descricao = tratar_descricao_com_cnpj(
+                descricao
+            )
+
+            dados.append({
+                "DATA": data_atual,
+                "VALOR": valor,
+                "DESCRIÇÃO": descricao
+            })
+
+        i += 1
         continue
 
-    # --------------------------------------------
-    # Ignora saldos e totais
-    # --------------------------------------------
+    # ----------------------------------------------------
+    # TENTA JUNTAR COM A PRÓXIMA LINHA
+    #
+    # Alguns PDFs quebram a movimentação em duas linhas.
+    # Exemplo:
+    #
+    # Transf Pix enviada EMPRESA
+    # 01.234.567/0001-00 - R$ 100,00
+    # ----------------------------------------------------
 
-    if any(
-        termo in linha_upper
-        for termo in termos_ignorar
-    ):
-        continue
+    if i + 1 < len(linhas):
 
-    sinal = match_valor.group(1)
+        proxima = linhas[i + 1]
 
-    valor_numero = match_valor.group(2)
+        if not eh_linha_saldo_ou_total_cora(
+            proxima
+        ):
 
-    # --------------------------------------------
-    # Monta valor
-    # --------------------------------------------
+            texto_junto = (
+                linha + " " + proxima
+            )
 
-    if sinal == "-":
-        valor = f"-{valor_numero}"
-    else:
-        valor = valor_numero
+            match_valor_junto, valor_junto = (
+                procurar_valor_cora(
+                    texto_junto
+                )
+            )
 
-    # --------------------------------------------
-    # Remove o valor da descrição
-    # --------------------------------------------
+            if match_valor_junto:
 
-    descricao = (
-        linha[:match_valor.start()]
-        .strip()
-    )
+                descricao = (
+                    texto_junto[
+                        :match_valor_junto.start()
+                    ].strip()
+                )
 
-    # Remove data do início
-    descricao = re.sub(
-        r'^\d{2}/\d{2}/\d{4}\s*',
-        '',
-        descricao
-    ).strip()
+                descricao = re.sub(
+                    r'^\d{2}/\d{2}/\d{4}\s*',
+                    '',
+                    descricao
+                ).strip()
 
-    # --------------------------------------------
-    # Ignora descrições vazias
-    # --------------------------------------------
+                if descricao:
 
-    if not descricao:
-        continue
+                    descricao = (
+                        tratar_descricao_com_cnpj(
+                            descricao
+                        )
+                    )
 
-    # --------------------------------------------
-    # Limpeza
-    # --------------------------------------------
+                    dados.append({
+                        "DATA": data_atual,
+                        "VALOR": valor_junto,
+                        "DESCRIÇÃO": descricao
+                    })
 
-    descricao = re.sub(
-        r'\s+',
-        ' ',
-        descricao
-    ).strip()
+                    i += 2
+                    continue
 
-    descricao_final = tratar_descricao_com_cnpj(
-        descricao
-    )
-
-    dados.append({
-        "DATA": data_atual,
-        "VALOR": valor,
-        "DESCRIÇÃO": descricao_final
-    })
+    i += 1
 
 df = pd.DataFrame(
     dados,
@@ -462,136 +643,51 @@ return (
 
 # ============================================================
 
-# XP
+# CORA - SEGUNDO MÉTODO DE EXTRAÇÃO
 
 # ============================================================
 
-def parse_xp(texto_completo):
+def parse_cora_layout_true(texto_paginas):
 
 ```
-match_cc = re.search(
-    r'Conta\s*:?\s*(\d+)',
-    texto_completo,
-    re.IGNORECASE
+"""
+Segundo método da Cora.
+
+Recebe as páginas individualmente e tenta reconstruir
+o texto usando layout=True.
+"""
+
+textos = []
+
+for texto in texto_paginas:
+
+    if texto:
+        textos.append(
+            texto
+        )
+
+texto_completo = "\n".join(
+    textos
 )
 
-conta = (
-    match_cc.group(1)
-    if match_cc
-    else "000000"
-)
-
-agencia = "0001"
-
-dados = []
-
-linhas = [
-    l.strip()
-    for l in texto_completo.splitlines()
-    if l.strip()
-]
-
-for line in linhas:
-
-    partes = [
-        p.strip()
-        for p in line.split('|')
-        if p.strip()
-    ]
-
-    if len(partes) < 3:
-        continue
-
-    if not re.match(
-        r'^\d{2}/\d{2}/\d{4}$',
-        partes[0]
-    ):
-        continue
-
-    data = partes[0]
-
-    if (
-        len(partes) >= 2
-        and re.match(
-            r'^\d{2}/\d{2}/\d{4}$',
-            partes[1]
-        )
-    ):
-
-        desc = (
-            partes[2]
-            if len(partes) > 2
-            else ""
-        )
-
-        valor_raw = (
-            partes[3]
-            if len(partes) > 3
-            else ""
-        )
-
-    else:
-
-        desc = partes[1]
-
-        valor_raw = (
-            partes[2]
-            if len(partes) > 2
-            else ""
-        )
-
-    match_val = re.search(
-        r'([-\+]?\s*R\$\s*[\d\.,]+|[-\+]?\d+[\d\.,]*)',
-        valor_raw
-    )
-
-    if not match_val:
-        continue
-
-    val_str = (
-        match_val.group(1)
-        .replace("R$", "")
-        .replace(" ", "")
-        .strip()
-    )
-
-    desc_final = tratar_descricao_com_cnpj(
-        desc
-    )
-
-    dados.append({
-        "DATA": data,
-        "VALOR": val_str,
-        "DESCRIÇÃO": desc_final
-    })
-
-return (
-    "XP",
-    agencia,
-    conta,
-    pd.DataFrame(
-        dados,
-        columns=[
-            "DATA",
-            "VALOR",
-            "DESCRIÇÃO"
-        ]
-    )
+return parse_cora(
+    texto_completo
 )
 ```
 
 # ============================================================
 
-# EXTRAÇÃO DO TEXTO DO PDF
+# EXTRAÇÃO DE TEXTO DO PDF
 
 # ============================================================
 
-def extrair_texto_pdf(file_bytes):
+def extrair_textos_pdf(file_bytes):
 
 ```
 import pdfplumber
 
-texto_paginas = []
+textos_layout_false = []
+textos_layout_true = []
 
 with pdfplumber.open(
     io.BytesIO(file_bytes)
@@ -599,20 +695,47 @@ with pdfplumber.open(
 
     for page in pdf.pages:
 
+        # --------------------------------------------
+        # MÉTODO 1 - layout=False
+        # --------------------------------------------
+
         try:
-            texto = page.extract_text(
+
+            texto_false = page.extract_text(
                 layout=False
             )
-        except Exception:
-            texto = None
 
-        if texto:
-            texto_paginas.append(
-                texto
+        except Exception:
+
+            texto_false = None
+
+        if texto_false:
+            textos_layout_false.append(
+                texto_false
             )
 
-return "\n".join(
-    texto_paginas
+        # --------------------------------------------
+        # MÉTODO 2 - layout=True
+        # --------------------------------------------
+
+        try:
+
+            texto_true = page.extract_text(
+                layout=True
+            )
+
+        except Exception:
+
+            texto_true = None
+
+        if texto_true:
+            textos_layout_true.append(
+                texto_true
+            )
+
+return (
+    textos_layout_false,
+    textos_layout_true
 )
 ```
 
@@ -625,12 +748,16 @@ return "\n".join(
 def detectar_banco(texto_completo):
 
 ```
-texto_upper = texto_completo.upper()
+texto_upper = (
+    texto_completo
+    .upper()
+)
 
-# Cora primeiro para evitar conflito
+# Cora primeiro
 if (
     "CORA" in texto_upper
     or "CORA SCFI" in texto_upper
+    or "BANCO CORA" in texto_upper
 ):
     return "CORA"
 
@@ -658,46 +785,126 @@ return "DESCONHECIDO"
 def extrair_dados_pdf(file_bytes):
 
 ```
-texto_completo = extrair_texto_pdf(
-    file_bytes
+textos_false, textos_true = (
+    extrair_textos_pdf(
+        file_bytes
+    )
 )
 
-if not texto_completo.strip():
+texto_false = "\n".join(
+    textos_false
+)
 
-    return (
-        "DESCONHECIDO",
-        "0000",
-        "00000",
-        pd.DataFrame(
-            columns=[
-                "DATA",
-                "VALOR",
-                "DESCRIÇÃO"
-            ]
+texto_true = "\n".join(
+    textos_true
+)
+
+# --------------------------------------------------------
+# DETECTA BANCO USANDO OS DOIS MÉTODOS
+# --------------------------------------------------------
+
+banco_false = detectar_banco(
+    texto_false
+)
+
+banco_true = detectar_banco(
+    texto_true
+)
+
+if banco_false == "CORA":
+
+    banco, agencia, conta, df = parse_cora(
+        texto_false
+    )
+
+    # Se encontrou lançamentos, usa esse resultado
+    if not df.empty:
+
+        return (
+            banco,
+            agencia,
+            conta,
+            df
+        )
+
+    # Caso contrário tenta layout=True
+    banco2, agencia2, conta2, df2 = (
+        parse_cora_layout_true(
+            textos_true
         )
     )
 
-banco = detectar_banco(
-    texto_completo
-)
+    if not df2.empty:
 
-if banco == "CORA":
+        return (
+            banco2,
+            agencia2,
+            conta2,
+            df2
+        )
 
-    return parse_cora(
-        texto_completo
+    return (
+        banco,
+        agencia,
+        conta,
+        df
     )
 
-if banco == "ITAU":
+# --------------------------------------------------------
+# CASO O PRIMEIRO MÉTODO NÃO IDENTIFIQUE CORA,
+# MAS O SEGUNDO IDENTIFIQUE
+# --------------------------------------------------------
+
+if banco_true == "CORA":
+
+    banco, agencia, conta, df = (
+        parse_cora_layout_true(
+            textos_true
+        )
+    )
+
+    return (
+        banco,
+        agencia,
+        conta,
+        df
+    )
+
+# --------------------------------------------------------
+# ITAÚ
+# --------------------------------------------------------
+
+if banco_false == "ITAU":
 
     return parse_itau(
-        texto_completo
+        texto_false
     )
 
-if banco == "XP":
+if banco_true == "ITAU":
+
+    return parse_itau(
+        texto_true
+    )
+
+# --------------------------------------------------------
+# XP
+# --------------------------------------------------------
+
+if banco_false == "XP":
 
     return parse_xp(
-        texto_completo
+        texto_false
     )
+
+if banco_true == "XP":
+
+    return parse_xp(
+        texto_true
+    )
+
+# --------------------------------------------------------
+# DESCONHECIDO
+# --------------------------------------------------------
 
 return (
     "DESCONHECIDO",
@@ -730,6 +937,10 @@ st.caption(
     "Processador e Padronizador de Extratos Bancários"
 )
 
+# --------------------------------------------------------
+# BIBLIOTECAS
+# --------------------------------------------------------
+
 try:
 
     import requests
@@ -743,15 +954,18 @@ try:
 except ImportError as e:
 
     st.error(
-        f"❌ Falta uma biblioteca: {e}"
+        f"❌ Biblioteca faltando: {e}"
     )
 
     st.info(
-        "Verifique se requests, pdfplumber, "
-        "pandas e openpyxl estão no requirements.txt."
+        "Verifique o requirements.txt."
     )
 
     return
+
+# --------------------------------------------------------
+# UPLOAD
+# --------------------------------------------------------
 
 uploaded_files = st.file_uploader(
     "Arraste os extratos em PDF aqui",
@@ -759,6 +973,10 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
     key="upload_extratos_costa_verde"
 )
+
+# --------------------------------------------------------
+# PROCESSAR
+# --------------------------------------------------------
 
 if uploaded_files and st.button(
     "🚀 Processar e Gerar Planilhas",
@@ -773,66 +991,112 @@ if uploaded_files and st.button(
 
             file_bytes = file.read()
 
-            banco, agencia, conta, df = extrair_dados_pdf(
-                file_bytes
+            banco, agencia, conta, df = (
+                extrair_dados_pdf(
+                    file_bytes
+                )
             )
 
             nome_chave = (
                 f"{banco} - {agencia} - {conta}"
             )
 
+            # ------------------------------------------------
+            # RESULTADO
+            # ------------------------------------------------
+
             if df.empty:
 
-                st.warning(
-                    f"⚠️ {file.name}: "
-                    f"Nenhuma movimentação capturada."
+                st.error(
+                    f"❌ {file.name}: "
+                    f"0 lançamentos encontrados."
                 )
-
-                # Mostra diagnóstico somente quando
-                # nenhum lançamento foi encontrado
-                with st.expander(
-                    f"🔎 Diagnóstico - {file.name}"
-                ):
-
-                    try:
-
-                        texto_debug = extrair_texto_pdf(
-                            file_bytes
-                        )
-
-                        st.write(
-                            "Banco detectado:",
-                            detectar_banco(
-                                texto_debug
-                            )
-                        )
-
-                        st.write(
-                            "Quantidade de caracteres extraídos:",
-                            len(texto_debug)
-                        )
-
-                        st.text(
-                            texto_debug[:5000]
-                        )
-
-                    except Exception as erro_debug:
-
-                        st.error(
-                            f"Erro no diagnóstico: {erro_debug}"
-                        )
 
             else:
 
                 st.success(
-                    f"✅ Processado: "
-                    f"**{nome_chave}.xlsx** "
-                    f"({len(df)} lançamentos)"
+                    f"✅ {file.name}: "
+                    f"{len(df)} lançamentos encontrados."
                 )
 
-                # Visualização para conferência
+                # --------------------------------------------
+                # TOTALIZADORES
+                # --------------------------------------------
+
+                entradas = 0.0
+                saidas = 0.0
+
+                for valor in df["VALOR"]:
+
+                    try:
+
+                        numero = str(
+                            valor
+                        ).replace(
+                            ".",
+                            ""
+                        ).replace(
+                            ",",
+                            "."
+                        )
+
+                        numero = float(
+                            numero
+                        )
+
+                        if numero >= 0:
+                            entradas += numero
+                        else:
+                            saidas += abs(numero)
+
+                    except Exception:
+                        pass
+
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    st.metric(
+                        "Lançamentos",
+                        len(df)
+                    )
+
+                with col2:
+                    st.metric(
+                        "Entradas",
+                        f"R$ {entradas:,.2f}".replace(
+                            ",",
+                            "X"
+                        ).replace(
+                            ".",
+                            ","
+                        ).replace(
+                            "X",
+                            "."
+                        )
+                    )
+
+                with col3:
+                    st.metric(
+                        "Saídas",
+                        f"R$ {saidas:,.2f}".replace(
+                            ",",
+                            "X"
+                        ).replace(
+                            ".",
+                            ","
+                        ).replace(
+                            "X",
+                            "."
+                        )
+                    )
+
+                # --------------------------------------------
+                # PRÉVIA
+                # --------------------------------------------
+
                 with st.expander(
-                    f"👁️ Conferir dados - {file.name}"
+                    f"👁️ Ver lançamentos - {file.name}",
+                    expanded=True
                 ):
 
                     st.dataframe(
@@ -842,7 +1106,87 @@ if uploaded_files and st.button(
                     )
 
             # ------------------------------------------------
-            # GERA EXCEL
+            # DIAGNÓSTICO
+            # ------------------------------------------------
+
+            if df.empty:
+
+                with st.expander(
+                    f"🔎 Diagnóstico - {file.name}",
+                    expanded=True
+                ):
+
+                    try:
+
+                        textos_false, textos_true = (
+                            extrair_textos_pdf(
+                                file_bytes
+                            )
+                        )
+
+                        texto_false = "\n".join(
+                            textos_false
+                        )
+
+                        texto_true = "\n".join(
+                            textos_true
+                        )
+
+                        st.write(
+                            "Banco detectado - layout normal:",
+                            detectar_banco(
+                                texto_false
+                            )
+                        )
+
+                        st.write(
+                            "Banco detectado - layout verdadeiro:",
+                            detectar_banco(
+                                texto_true
+                            )
+                        )
+
+                        st.write(
+                            "Caracteres extraídos - layout normal:",
+                            len(texto_false)
+                        )
+
+                        st.write(
+                            "Caracteres extraídos - layout verdadeiro:",
+                            len(texto_true)
+                        )
+
+                        st.write(
+                            "Quantidade de páginas/textos:",
+                            len(textos_false)
+                        )
+
+                        st.write(
+                            "Primeiros 5.000 caracteres "
+                            "do layout normal:"
+                        )
+
+                        st.text(
+                            texto_false[:5000]
+                        )
+
+                        st.write(
+                            "Primeiros 5.000 caracteres "
+                            "do layout verdadeiro:"
+                        )
+
+                        st.text(
+                            texto_true[:5000]
+                        )
+
+                    except Exception as erro_debug:
+
+                        st.exception(
+                            erro_debug
+                        )
+
+            # ------------------------------------------------
+            # EXCEL
             # ------------------------------------------------
 
             buffer = io.BytesIO()
@@ -875,8 +1219,12 @@ if uploaded_files and st.button(
                 f"**{file.name}**: {e}"
             )
 
+            st.exception(
+                e
+            )
+
     # --------------------------------------------------------
-    # DOWNLOAD
+    # DOWNLOAD ZIP
     # --------------------------------------------------------
 
     if arquivos_gerados:
@@ -895,7 +1243,9 @@ if uploaded_files and st.button(
             compression=zipfile.ZIP_DEFLATED
         ) as zip_file:
 
-            for nome_arq, dados_arq in arquivos_gerados.items():
+            for nome_arq, dados_arq in (
+                arquivos_gerados.items()
+            ):
 
                 zip_file.writestr(
                     nome_arq,
@@ -918,7 +1268,19 @@ if uploaded_files and st.button(
 # ============================================================
 
 def pagina_extratos():
+
+```
 pagina_costa_verde_extratos()
+```
+
+# ============================================================
+
+# EXECUÇÃO DIRETA
+
+# ============================================================
 
 if **name** == "**main**":
+
+```
 pagina_costa_verde_extratos()
+```
