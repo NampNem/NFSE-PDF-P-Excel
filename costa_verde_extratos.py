@@ -7,7 +7,7 @@ import streamlit as st
 
 
 # ============================================================
-# SISTEMA: PROCESSADOR DE EXTRATOS BANCÁRIOS
+# SISTEMA: PROCESSADOR DE EXTRATOS BANCÁRIOS - COSTA VERDE
 # ============================================================
 def consultar_cnpj(cnpj_limpo):
     """Consulta Razão Social via BrasilAPI com fallback e cache local."""
@@ -32,55 +32,57 @@ def consultar_cnpj(cnpj_limpo):
     return cnpj_limpo
 
 
-def tratar_descricao_com_cnpj(tipo_transacao, texto_complementar):
-    """Localiza o CNPJ e monta o padrão 'TIPO DE OPERAÇÃO - NOME ENCONTRADO'."""
-    cnpjs = re.findall(r'\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b', texto_complementar)
+def tratar_descricao_com_cnpj(tipo_transacao, texto_complementar=""):
+    """Localiza o CNPJ/CPF ou limpa a descrição."""
+    texto_completo = f"{tipo_transacao} {texto_complementar}".strip()
+    
+    # Busca CNPJ
+    cnpjs = re.findall(r'\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b', texto_completo)
     if cnpjs:
         cnpj_limpo = re.sub(r'\D', '', cnpjs[0])
         nome_empresa = consultar_cnpj(cnpj_limpo)
-        return f"{tipo_transacao.strip()} - {nome_empresa}"
+        desc_limpa = re.sub(r'\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b', '', texto_completo).strip()
+        desc_limpa = re.sub(r'\s+', ' ', desc_limpa)
+        return f"{desc_limpa} - {nome_empresa}" if nome_empresa != cnpj_limpo else desc_limpa
 
-    # Se não houver CNPJ formato padrão, limpa o texto complementar e junta
-    texto_limpo = re.sub(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}', '', texto_complementar).strip()
-    if texto_limpo:
-        return f"{tipo_transacao.strip()} - {texto_limpo}"
-    return tipo_transacao.strip()
+    # Limpa caracteres de tabela '|' e espaços excessivos
+    texto_limpo = re.sub(r'[\|]', '', texto_completo)
+    texto_limpo = re.sub(r'\s+', ' ', texto_limpo).strip()
+    return texto_limpo
 
 
 def parse_itau(texto_completo):
     match_ag = re.search(r'Ag[êe]ncia\s+(\d+)', texto_completo, re.IGNORECASE)
     match_cc = re.search(r'Conta\s+([\d-]+)', texto_completo, re.IGNORECASE)
-    agencia = match_ag.group(1) if match_ag else "0001"
-    conta = match_cc.group(1) if match_cc else "000000"
+    agencia = match_ag.group(1) if match_ag else "6081"
+    conta = match_cc.group(1) if match_cc else "0098779-1"
 
-    linhas = texto_completo.split('\n')
+    linhas = [l.strip() for l in texto_completo.split('\n') if l.strip()]
     dados = []
 
-    # Expressão para identificar linha de lançamento no Itaú: DD/MM/AAAA
-    for i, line in enumerate(linhas):
-        match_data = re.match(r'^(\d{2}/\d{2}/\d{4})\s+(.+)$', line.strip())
+    # Descarta APENAS linhas de posições e saldos de controle (não movimentações)
+    saldos_informativos = [
+        "SALDO ANTERIOR", "SALDO TOTAL", "SALDO MOVIMENTAÇÃO", 
+        "SALDO BLOQUEADO", "SALDO DISPONÍVEL", "SALDO APLIC. AUT."
+    ]
+
+    for line in linhas:
+        match_data = re.match(r'^(\d{2}/\d{2}/\d{4})\s+(.+)$', line)
         if match_data:
             data = match_data.group(1)
-            resto = match_data.group(2)
+            resto = match_data.group(2).strip()
 
-            # Descarta linhas de saldos informativos
-            if any(s in resto.upper() for s in ["SALDO ANTERIOR", "SALDO TOTAL", "SALDO MOVIMENTAÇÃO", "SALDO APLIC"]):
+            # Descarta se for apenas informação de saldo acumulado
+            if any(term in resto.upper() for term in saldos_informativos):
                 continue
 
-            # Tenta pegar valor no final da linha
-            partes = resto.split()
-            valor = partes[-1] if partes else ""
-            tipo_op = " ".join(partes[:-1]) if len(partes) > 1 else resto
-
-            # Tenta buscar complemento com CNPJ na linha imediatamente posterior
-            complemento = ""
-            if i + 1 < len(linhas):
-                prox_linha = linhas[i + 1].strip()
-                if not re.match(r'^\d{2}/\d{2}/\d{4}', prox_linha):
-                    complemento = prox_linha
-
-            desc_final = tratar_descricao_com_cnpj(tipo_op, complemento)
-            dados.append({"DATA": data, "VALOR": valor, "DESCRIÇÃO": desc_final})
+            # Extrai o valor do final da linha
+            match_valor = re.search(r'([-\+]?\s*[\d\.]+\,\d{2})$', resto)
+            if match_valor:
+                valor_str = match_valor.group(1).replace(" ", "")
+                desc = resto[:match_valor.start()].strip()
+                desc_final = tratar_descricao_com_cnpj(desc)
+                dados.append({"DATA": data, "VALOR": valor_str, "DESCRIÇÃO": desc_final})
 
     return "ITAU", agencia, conta, pd.DataFrame(dados)
 
@@ -89,39 +91,41 @@ def parse_cora(texto_completo):
     match_ag = re.search(r'Ag[êe]ncia:\s*([\d-]+)', texto_completo)
     match_cc = re.search(r'Conta:\s*([\d-]+)', texto_completo)
     agencia = match_ag.group(1) if match_ag else "0001"
-    conta = match_cc.group(1) if match_cc else "000000"
+    conta = match_cc.group(1) if match_cc else "3715423-5"
 
     dados = []
-    linhas = [l.strip() for l in texto_completo.split('\n') if l.strip()]
+    linhas = [re.sub(r'^\s*\|\s*', '', l).strip() for l in texto_completo.split('\n') if l.strip()]
 
     i = 0
     data_atual = None
     while i < len(linhas):
         line = linhas[i]
 
-        # Identifica cabeçalhos de data no Cora (ex: 30/03/2026)
         if re.match(r'^\d{2}/\d{2}/\d{4}$', line):
             data_atual = line
             i += 1
             continue
 
-        # Identifica valores do Cora (ex: - R$ 1.789,68 ou + R$ 5.000,00)
-        match_val = re.search(r'([+-]\s*R\$\s*[\d\.,]+)', line)
+        match_val = re.search(r'([+-])\s*R\$\s*([\d\.,]+)', line)
         if match_val and data_atual:
-            valor = match_val.group(1)
-            tipo_op = linhas[i - 1] if i - 1 >= 0 else "TRANSAÇÃO"
+            sinal = match_val.group(1)
+            val_num = match_val.group(2)
+            valor_str = f"-{val_num}" if sinal == "-" else val_num
 
-            # Descarta saldos informativos do dia
-            if "Saldo do dia" in line or "Saldo do dia" in tipo_op:
-                i += 1
-                continue
+            bloco_desc = []
+            j = i - 1
+            while j >= 0:
+                prev_line = linhas[j]
+                if re.match(r'^\d{2}/\d{2}/\d{4}$', prev_line) or "Saldo do dia" in prev_line or re.search(r'R\$\s*[\d\.,]+', prev_line):
+                    break
+                bloco_desc.insert(0, prev_line)
+                j -= 1
 
-            complemento = ""
-            if i + 1 < len(linhas) and not re.match(r'^\d{2}/\d{2}/\d{4}$', linhas[i + 1]):
-                complemento = linhas[i + 1]
+            desc_bruta = " ".join(bloco_desc).strip()
 
-            desc_final = tratar_descricao_com_cnpj(tipo_op, complemento)
-            dados.append({"DATA": data_atual, "VALOR": valor, "DESCRIÇÃO": desc_final})
+            if "Saldo do dia" not in line and "Saldo do dia" not in desc_bruta:
+                desc_final = tratar_descricao_com_cnpj(desc_bruta)
+                dados.append({"DATA": data_atual, "VALOR": valor_str, "DESCRIÇÃO": desc_final})
 
         i += 1
 
@@ -134,14 +138,27 @@ def parse_xp(texto_completo):
     agencia = "0001"
 
     dados = []
-    # Tratamento de linhas de lançamentos XP quando houverem movimentações
-    linhas = texto_completo.split('\n')
+    linhas = [l.strip() for l in texto_completo.split('\n') if l.strip()]
+    
     for line in linhas:
-        match_linha = re.match(r'^(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([-\+]?\s*\d+[\d\.,]*)$', line.strip())
-        if match_linha:
-            data, desc, valor = match_linha.groups()
-            desc_final = tratar_descricao_com_cnpj(desc, "")
-            dados.append({"DATA": data, "VALOR": valor, "DESCRIÇÃO": desc_final})
+        partes = [p.strip() for p in line.split('|') if p.strip()]
+        
+        if len(partes) >= 3:
+            if re.match(r'^\d{2}/\d{2}/\d{4}$', partes[0]):
+                data = partes[0]
+                
+                if re.match(r'^\d{2}/\d{2}/\d{4}$', partes[1]):
+                    desc = partes[2]
+                    valor_raw = partes[3] if len(partes) > 3 else ""
+                else:
+                    desc = partes[1]
+                    valor_raw = partes[2] if len(partes) > 2 else ""
+
+                match_val = re.search(r'([-\+]?\s*R\$\s*[\d\.,]+|[-\+]?\d+[\d\.,]*)', valor_raw)
+                if match_val:
+                    val_str = match_val.group(1).replace("R$", "").replace(" ", "").strip()
+                    desc_final = tratar_descricao_com_cnpj(desc)
+                    dados.append({"DATA": data, "VALOR": val_str, "DESCRIÇÃO": desc_final})
 
     return "XP", agencia, conta, pd.DataFrame(dados)
 
@@ -152,11 +169,10 @@ def extrair_dados_pdf(file_bytes):
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         texto_completo = ""
         for page in pdf.pages:
-            t = page.extract_text()
+            t = page.extract_text(layout=False)
             if t:
                 texto_completo += t + "\n"
 
-    # Roteamento pelo identificador do banco no texto
     texto_upper = texto_completo.upper()
     if "ITAÚ" in texto_upper or "ITAU" in texto_upper:
         return parse_itau(texto_completo)
@@ -168,11 +184,10 @@ def extrair_dados_pdf(file_bytes):
         return "DESCONHECIDO", "0000", "00000", pd.DataFrame()
 
 
-def pagina_extratos():
+def pagina_costa_verde_extratos():
     st.title("📊 Extratos - Costa Verde")
     st.caption("Processador e Padronizador de Extratos Bancários")
 
-    # Confere se as bibliotecas necessárias estão instaladas
     try:
         import requests  # noqa: F401
         import pdfplumber  # noqa: F401
@@ -187,10 +202,10 @@ def pagina_extratos():
         "Arraste os extratos em PDF aqui",
         type=["pdf"],
         accept_multiple_files=True,
-        key="upload_extratos",
+        key="upload_extratos_costa_verde",
     )
 
-    if uploaded_files and st.button("🚀 Processar e Gerar Planilhas", key="processar_extratos"):
+    if uploaded_files and st.button("🚀 Processar e Gerar Planilhas", key="processar_extratos_costa_verde"):
         arquivos_gerados = {}
 
         for file in uploaded_files:
@@ -198,16 +213,16 @@ def pagina_extratos():
             nome_chave = f"{banco} - {agencia} - {conta}"
 
             if df.empty:
-                # Cria DataFrame padrão vazio para contas sem movimentação no período
                 df = pd.DataFrame(columns=["DATA", "VALOR", "DESCRIÇÃO"])
-                st.info(f"ℹ️ {nome_chave}: Nenhuma movimentação no período. Gerando planilha vazia no layout.")
+                st.info(f"ℹ️ {nome_chave}: Nenhuma movimentação capturada ou PDF sem lançamentos.")
+            else:
+                st.success(f"✅ Processado: **{nome_chave}.xlsx** ({len(df)} lançamentos)")
 
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                 df[["DATA", "VALOR", "DESCRIÇÃO"]].to_excel(writer, index=False, sheet_name="Extrato")
 
             arquivos_gerados[f"{nome_chave}.xlsx"] = buffer.getvalue()
-            st.success(f"✅ Processado: **{nome_chave}.xlsx** ({len(df)} lançamentos)")
 
         if arquivos_gerados:
             st.markdown("---")
@@ -221,6 +236,6 @@ def pagina_extratos():
             st.download_button(
                 label="📦 Baixar Todos em ZIP",
                 data=zip_buffer.getvalue(),
-                file_name="Extratos_Formatados.zip",
+                file_name="Costa_Verde_Extratos_Formatados.zip",
                 mime="application/zip",
             )
