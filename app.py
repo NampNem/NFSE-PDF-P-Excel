@@ -18,10 +18,6 @@ st.set_page_config(
     page_title="Extrator de NFS-e (XML)", page_icon="📄", layout="wide"
 )
 
-st.title("📄 Extrator de NFS-e (XML) e Gerador Alterdata / Domínio")
-st.write(
-    "Faça o upload dos arquivos **XML**, **PDF** ou de arquivos **ZIP** contendo os documentos."
-)
 
 NOME_BANCO_DADOS = "banco_de_dados.xlsx"
 
@@ -37,6 +33,7 @@ CONTAS = {
         "irrf": "763",
         "inss": "834",
         "iss": "3332",
+        "historico": "",         # código do histórico padrão
     },
     "dominio": {
         "debito_padrao": "325",
@@ -45,6 +42,7 @@ CONTAS = {
         "irrf": "178",
         "inss": "184",
         "iss": "183",
+        "historico": "",
     },
 }
 
@@ -281,66 +279,6 @@ def salvar_banco_dados_github(mapa):
 
 
 # ============================================================
-# GERENCIADOR NA BARRA LATERAL (SIDEBAR)
-# ============================================================
-COL_COD = "Código Tributação"
-COL_DESC = "Descrição (Operação)"
-COL_ALT = "Conta Débito Alterdata"
-COL_DOM = "Conta Débito Domínio"
-
-with st.sidebar:
-    st.header("⚙️ Gerenciar Banco de Dados")
-    st.write(
-        "Modifique, adicione ou remova códigos de tributação e as contas contábeis "
-        "vinculadas (uma coluna para o Alterdata e outra para o Domínio)."
-    )
-
-    mapa_atual = carregar_banco_dados_github()
-    df_gerenciador = pd.DataFrame(
-        [
-            {
-                COL_COD: cod,
-                COL_DESC: dados.get("descricao", ""),
-                COL_ALT: dados.get("conta", ""),
-                COL_DOM: dados.get("conta_dominio", ""),
-            }
-            for cod, dados in mapa_atual.items()
-        ],
-        columns=[COL_COD, COL_DESC, COL_ALT, COL_DOM],
-    )
-
-    df_editado = st.data_editor(
-        df_gerenciador,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_bd",
-    )
-
-    if st.button("💾 Salvar Alterações no Banco de Dados"):
-        novo_mapa = {}
-        for _, row in df_editado.iterrows():
-            # Ignora linhas em branco (evita gravar "None" / "nan" como código)
-            if pd.isna(row[COL_COD]) or not str(row[COL_COD]).strip():
-                continue
-
-            cod = extrair_codigo_do_banco(str(row[COL_COD]))
-            descricao = (
-                str(row[COL_DESC]).strip() if pd.notna(row[COL_DESC]) else ""
-            )
-            conta = limpar_conta(row[COL_ALT])
-            conta_dom = limpar_conta(row[COL_DOM])
-            if cod:
-                novo_mapa[cod] = {
-                    "descricao": descricao,
-                    "conta": conta,
-                    "conta_dominio": conta_dom,
-                }
-
-        salvar_banco_dados_github(novo_mapa)
-        st.rerun()
-
-
-# ============================================================
 # PARSER EXTRATOR DE XML (NFS-E E EVENTOS)
 # ============================================================
 def extrair_xml(caminho_ou_conteudo):
@@ -505,6 +443,9 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
     do dicionário CONTAS.
     """
     contas = contas or CONTAS[modo]
+    historico = str(contas.get("historico", "99")).strip() or "99"
+    if historico.isdigit():
+        historico = int(historico)
     linhas_alterdata = []
 
     for _, row in df_extrato.iterrows():
@@ -535,7 +476,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
                 "credito": contas["credito_principal"],
                 "valor": val_bruto,
                 "documento": num_nota,
-                "historico": 99,
+                "historico": historico,
                 "descrição": desc_padrao,
             })
         else:
@@ -545,7 +486,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
                 "credito": "",
                 "valor": val_bruto,
                 "documento": num_nota,
-                "historico": 99,
+                "historico": historico,
                 "descrição": desc_padrao,
             })
 
@@ -570,7 +511,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
                     "credito": contas["pcc"],
                     "valor": soma_pcc,
                     "documento": num_nota,
-                    "historico": 99,
+                    "historico": historico,
                     "descrição": desc_pcc,
                 })
 
@@ -582,7 +523,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
                     "credito": contas["irrf"],
                     "valor": val_irrf,
                     "documento": num_nota,
-                    "historico": 99,
+                    "historico": historico,
                     "descrição": desc_irrf,
                 })
 
@@ -594,7 +535,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
                     "credito": contas["inss"],
                     "valor": val_inss,
                     "documento": num_nota,
-                    "historico": 99,
+                    "historico": historico,
                     "descrição": desc_inss,
                 })
 
@@ -606,7 +547,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
                     "credito": contas["iss"],
                     "valor": val_iss,
                     "documento": num_nota,
-                    "historico": 99,
+                    "historico": historico,
                     "descrição": desc_iss,
                 })
 
@@ -616,7 +557,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
                 "credito": contas["credito_principal"],
                 "valor": val_liquido,
                 "documento": num_nota,
-                "historico": 99,
+                "historico": historico,
                 "descrição": desc_padrao,
             })
 
@@ -751,341 +692,462 @@ def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
 
 
 # ============================================================
-# INTERFACE STREAMLIT PRINCIPAL
+# PÁGINA: SIEG XML PARA IMPORTAÇÃO
 # ============================================================
-uploaded_files = st.file_uploader(
-    "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
-    type=["xml", "pdf", "zip"],
-    accept_multiple_files=True,
-)
+def pagina_sieg_xml():
+    if st.button("⬅️ Voltar ao menu"):
+        st.session_state["pagina"] = "menu"
+        st.rerun()
 
-if uploaded_files:
-    col_btn1, col_btn2, _ = st.columns([1, 1, 2])
-    with col_btn1:
-        processar_alterdata = st.button("🚀 Processar para Alterdata")
-    with col_btn2:
-        processar_dominio = st.button("🚀 Processar para Domínio")
+    st.title("📄 SIEG XML PARA Importação")
+    st.write(
+        "Faça o upload dos arquivos **XML**, **PDF** ou de arquivos **ZIP** contendo os documentos."
+    )
 
-    if processar_alterdata or processar_dominio:
-        modo_escolhido = "dominio" if processar_dominio else "alterdata"
-        st.session_state["modo"] = modo_escolhido
+    # ============================================================
+    # GERENCIADOR NA BARRA LATERAL (SIDEBAR)
+    # ============================================================
+    COL_COD = "Código Tributação"
+    COL_DESC = "Descrição (Operação)"
+    COL_ALT = "Conta Débito Alterdata"
+    COL_DOM = "Conta Débito Domínio"
 
-        temp_dir = tempfile.mkdtemp()
-        xmls_para_processar = []
-        pdfs_encontrados = {}
-
-        for uploaded_file in uploaded_files:
-            nome_arquivo = uploaded_file.name
-            extensao = os.path.splitext(nome_arquivo)[1].lower()
-
-            if extensao == ".xml":
-                caminho_xml = os.path.join(temp_dir, nome_arquivo)
-                with open(caminho_xml, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                xmls_para_processar.append(caminho_xml)
-
-            elif extensao == ".pdf":
-                caminho_pdf = os.path.join(temp_dir, nome_arquivo)
-                with open(caminho_pdf, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                nome_sem_ext = os.path.splitext(nome_arquivo)[0]
-                pdfs_encontrados[nome_sem_ext] = caminho_pdf
-
-            elif extensao == ".zip":
-                caminho_zip = os.path.join(temp_dir, nome_arquivo)
-                with open(caminho_zip, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-
-                pasta_zip = os.path.join(
-                    temp_dir, os.path.splitext(nome_arquivo)[0]
-                )
-                os.makedirs(pasta_zip, exist_ok=True)
-
-                try:
-                    with zipfile.ZipFile(caminho_zip, "r") as zip_ref:
-                        zip_ref.extractall(pasta_zip)
-
-                    for raiz, _, arquivos in os.walk(pasta_zip):
-                        for arq in arquivos:
-                            ext = os.path.splitext(arq)[1].lower()
-                            caminho_completo = os.path.join(raiz, arq)
-                            if ext == ".xml":
-                                xmls_para_processar.append(caminho_completo)
-                            elif ext == ".pdf":
-                                nome_sem_ext = os.path.splitext(arq)[0]
-                                pdfs_encontrados[nome_sem_ext] = caminho_completo
-                except Exception as e:
-                    st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
-
-        if xmls_para_processar:
-            registros_nfse = []
-            registros_eventos = []
-            erros_processamento = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-
-            for i, caminho_xml in enumerate(xmls_para_processar):
-                nome_xml = os.path.basename(caminho_xml)
-                status_text.text(
-                    f"Processando [{i+1}/{len(xmls_para_processar)}]: {nome_xml}"
-                )
-                try:
-                    dados = extrair_xml(caminho_xml)
-                    if dados.get("tipo_xml") == "EVENTO":
-                        registros_eventos.append(dados)
-                    else:
-                        registros_nfse.append(dados)
-                except Exception as err:
-                    erros_processamento.append(f"{nome_xml}: {str(err)}")
-                progress_bar.progress((i + 1) / len(xmls_para_processar))
-
-            status_text.text("Extração concluída!")
-
-            if erros_processamento:
-                with st.expander("⚠️ Arquivos com erro de leitura"):
-                    for err_msg in erros_processamento:
-                        st.write(f"- {err_msg}")
-
-            df_nfse = pd.DataFrame(registros_nfse)
-
-            # Avisa quando a conta bruto/líquido/retenções não fechou ou ficou ambígua
-            if not df_nfse.empty:
-                problemas = df_nfse[df_nfse["Status Validação"] != "OK"]
-                if not problemas.empty:
-                    st.warning(
-                        f"⚠️ {len(problemas)} nota(s) com retenção que não fechou "
-                        "ou ficou ambígua. Confira a aba 'NFS-e Extraídas'."
-                    )
-                    st.dataframe(
-                        problemas[
-                            [
-                                "Número da NFS-e",
-                                "Nome da Empresa",
-                                "Valor do Serviço",
-                                "Valor Líquido",
-                                "Status Validação",
-                            ]
-                        ],
-                        use_container_width=True,
-                    )
-
-            st.session_state["df_extrato"] = df_nfse
-            st.session_state["eventos_list"] = registros_eventos
-
-            # Mapeia os PDFs para o novo arquivo ZIP organizado por pastas mensais
-            zip_pdf_bytes = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
-            st.session_state["zip_pdf_bytes"] = zip_pdf_bytes
-
-            mapa_tipo_servico_xml = {}
-            if not df_nfse.empty:
-                for _, row in df_nfse.iterrows():
-                    cod = str(row.get("Código Tributação", "") or "").strip()
-                    tipo = str(row.get("Tipo de Serviço", "") or "").strip()
-                    if cod and tipo and cod not in mapa_tipo_servico_xml:
-                        mapa_tipo_servico_xml[cod] = tipo
-            st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
-
-            mapa_contas = carregar_banco_dados_github()
-            if not df_nfse.empty:
-                codigos_na_nf = set(df_nfse["Código Tributação"].dropna().unique())
-                ausentes = [
-                    c
-                    for c in codigos_na_nf
-                    if c and codigo_precisa_cadastro(mapa_contas, c, modo_escolhido)
-                ]
-            else:
-                ausentes = []
-
-            st.session_state["codigos_ausentes"] = ausentes
-
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-# EXIBIÇÃO DE RESULTADOS E MAPPINGS
-if (
-    "df_extrato" in st.session_state
-    and st.session_state["df_extrato"] is not None
-):
-    modo = st.session_state.get("modo", "alterdata")
-    nome_modo = NOMES_MODO[modo]
-
-    mapa_contas = carregar_banco_dados_github()
-    df = st.session_state["df_extrato"]
-    eventos_list = st.session_state.get("eventos_list", [])
-    ausentes = st.session_state.get("codigos_ausentes", [])
-    mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
-    zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
-
-    st.info(f"Modo de processamento: **{nome_modo}**")
-
-    if ausentes:
-        st.warning(
-            f"⚠️ Foram encontrados Códigos de Tributação sem conta {nome_modo} "
-            "cadastrada no Banco de Dados!"
+    with st.sidebar:
+        st.header("⚙️ Gerenciar Banco de Dados")
+        st.write(
+            "Modifique, adicione ou remova códigos de tributação e as contas contábeis "
+            "vinculadas (uma coluna para o Alterdata e outra para o Domínio)."
         )
 
-        conta_padrao = CONTAS[modo]["debito_padrao"]
-
-        with st.form("form_novos_codigos"):
-            novos_cadastros = {}
-            for cod in ausentes:
-                descricao_para_salvar = (
-                    mapa_contas.get(cod, {}).get("descricao")
-                    or mapa_tipo_servico_xml.get(cod, "Descrição do Serviço")
-                )
-
-                st.markdown(f"### 📌 Código: `{cod}`")
-                st.info(f"📄 **Descrição do XML:** {cod} - {descricao_para_salvar}")
-
-                nova_conta = st.text_input(
-                    f"Informe a conta débito {nome_modo} para o código {cod} "
-                    f"(deixe em branco para usar {conta_padrao}):",
-                    key=f"input_{modo}_{cod}",
-                )
-                novos_cadastros[cod] = {
-                    "descricao": descricao_para_salvar,
-                    "conta": nova_conta,
+        mapa_atual = carregar_banco_dados_github()
+        df_gerenciador = pd.DataFrame(
+            [
+                {
+                    COL_COD: cod,
+                    COL_DESC: dados.get("descricao", ""),
+                    COL_ALT: dados.get("conta", ""),
+                    COL_DOM: dados.get("conta_dominio", ""),
                 }
-                st.divider()
-
-            salvar_btn = st.form_submit_button("💾 Confirmar e Processar")
-
-        if salvar_btn:
-            for cod, dados in novos_cadastros.items():
-                conta_informada = dados["conta"].strip() or conta_padrao
-                existente = mapa_contas.get(
-                    cod, {"descricao": dados["descricao"], "conta": "", "conta_dominio": ""}
-                )
-                existente["descricao"] = existente.get("descricao") or dados["descricao"]
-                if modo == "dominio":
-                    existente["conta_dominio"] = conta_informada
-                else:
-                    existente["conta"] = conta_informada
-                mapa_contas[cod] = existente
-
-            salvar_banco_dados_github(mapa_contas)
-            st.session_state["codigos_ausentes"] = []
-            st.success("Contas atualizadas com sucesso!")
-
-    if not st.session_state.get("codigos_ausentes"):
-
-        # ----------------------------------------------------
-        # CONTAS DOS IMPOSTOS RETIDOS (EDITÁVEIS ANTES DE GERAR)
-        # Já vêm preenchidas com os valores padrão do dicionário CONTAS.
-        # ----------------------------------------------------
-        st.subheader(f"🧾 Contas dos impostos retidos - {nome_modo}")
-        st.caption(
-            "Já vêm preenchidas com as contas padrão. Altere se necessário "
-            "(campo em branco volta para a conta padrão). "
-            "A prévia e os arquivos abaixo usam as contas informadas aqui."
+                for cod, dados in mapa_atual.items()
+            ],
+            columns=[COL_COD, COL_DESC, COL_ALT, COL_DOM],
         )
 
-        padrao = CONTAS[modo]
-        campos_contas = [
-            ("credito_principal", "Fornecedores (crédito)"),
-            ("pcc", "PIS / COFINS / CSLL"),
-            ("irrf", "IRRF"),
-            ("inss", "INSS"),
-            ("iss", "ISS"),
-        ]
+        df_editado = st.data_editor(
+            df_gerenciador,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="editor_bd",
+        )
 
-        contas_editadas = dict(padrao)  # mantém também o debito_padrao
-        colunas_contas = st.columns(len(campos_contas))
-        for coluna, (chave, rotulo) in zip(colunas_contas, campos_contas):
-            with coluna:
-                valor_digitado = st.text_input(
-                    rotulo,
-                    value=padrao[chave],
-                    key=f"conta_{modo}_{chave}",  # separado por sistema
+        if st.button("💾 Salvar Alterações no Banco de Dados"):
+            novo_mapa = {}
+            for _, row in df_editado.iterrows():
+                # Ignora linhas em branco (evita gravar "None" / "nan" como código)
+                if pd.isna(row[COL_COD]) or not str(row[COL_COD]).strip():
+                    continue
+
+                cod = extrair_codigo_do_banco(str(row[COL_COD]))
+                descricao = (
+                    str(row[COL_DESC]).strip() if pd.notna(row[COL_DESC]) else ""
                 )
-                contas_editadas[chave] = valor_digitado.strip() or padrao[chave]
+                conta = limpar_conta(row[COL_ALT])
+                conta_dom = limpar_conta(row[COL_DOM])
+                if cod:
+                    novo_mapa[cod] = {
+                        "descricao": descricao,
+                        "conta": conta,
+                        "conta_dominio": conta_dom,
+                    }
 
-        df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo, contas_editadas)
-        df_substituidas = gerar_aba_substituidas(eventos_list, df)
+            salvar_banco_dados_github(novo_mapa)
+            st.rerun()
 
-        nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
 
-        st.subheader(f"📊 Prévia - Aba {nome_aba}")
-        st.dataframe(df_lancamentos, use_container_width=True)
 
-        if not df_substituidas.empty:
-            st.subheader("⚠️ Notas Canceladas e Substituídas Identificadas")
-            st.dataframe(df_substituidas, use_container_width=True)
+    # ============================================================
+    # INTERFACE STREAMLIT PRINCIPAL
+    # ============================================================
+    uploaded_files = st.file_uploader(
+        "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
+        type=["xml", "pdf", "zip"],
+        accept_multiple_files=True,
+    )
 
-        # Monta a planilha Excel em memória
-        buffer_excel = io.BytesIO()
-        with pd.ExcelWriter(
-            buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy"
-        ) as writer:
-            df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
-            df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+    if uploaded_files:
+        col_btn1, col_btn2, _ = st.columns([1, 1, 2])
+        with col_btn1:
+            processar_alterdata = st.button("🚀 Processar para Alterdata")
+        with col_btn2:
+            processar_dominio = st.button("🚀 Processar para Domínio")
+
+        if processar_alterdata or processar_dominio:
+            modo_escolhido = "dominio" if processar_dominio else "alterdata"
+            st.session_state["modo"] = modo_escolhido
+
+            temp_dir = tempfile.mkdtemp()
+            xmls_para_processar = []
+            pdfs_encontrados = {}
+
+            for uploaded_file in uploaded_files:
+                nome_arquivo = uploaded_file.name
+                extensao = os.path.splitext(nome_arquivo)[1].lower()
+
+                if extensao == ".xml":
+                    caminho_xml = os.path.join(temp_dir, nome_arquivo)
+                    with open(caminho_xml, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    xmls_para_processar.append(caminho_xml)
+
+                elif extensao == ".pdf":
+                    caminho_pdf = os.path.join(temp_dir, nome_arquivo)
+                    with open(caminho_pdf, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    nome_sem_ext = os.path.splitext(nome_arquivo)[0]
+                    pdfs_encontrados[nome_sem_ext] = caminho_pdf
+
+                elif extensao == ".zip":
+                    caminho_zip = os.path.join(temp_dir, nome_arquivo)
+                    with open(caminho_zip, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+
+                    pasta_zip = os.path.join(
+                        temp_dir, os.path.splitext(nome_arquivo)[0]
+                    )
+                    os.makedirs(pasta_zip, exist_ok=True)
+
+                    try:
+                        with zipfile.ZipFile(caminho_zip, "r") as zip_ref:
+                            zip_ref.extractall(pasta_zip)
+
+                        for raiz, _, arquivos in os.walk(pasta_zip):
+                            for arq in arquivos:
+                                ext = os.path.splitext(arq)[1].lower()
+                                caminho_completo = os.path.join(raiz, arq)
+                                if ext == ".xml":
+                                    xmls_para_processar.append(caminho_completo)
+                                elif ext == ".pdf":
+                                    nome_sem_ext = os.path.splitext(arq)[0]
+                                    pdfs_encontrados[nome_sem_ext] = caminho_completo
+                    except Exception as e:
+                        st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
+
+            if xmls_para_processar:
+                registros_nfse = []
+                registros_eventos = []
+                erros_processamento = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                for i, caminho_xml in enumerate(xmls_para_processar):
+                    nome_xml = os.path.basename(caminho_xml)
+                    status_text.text(
+                        f"Processando [{i+1}/{len(xmls_para_processar)}]: {nome_xml}"
+                    )
+                    try:
+                        dados = extrair_xml(caminho_xml)
+                        if dados.get("tipo_xml") == "EVENTO":
+                            registros_eventos.append(dados)
+                        else:
+                            registros_nfse.append(dados)
+                    except Exception as err:
+                        erros_processamento.append(f"{nome_xml}: {str(err)}")
+                    progress_bar.progress((i + 1) / len(xmls_para_processar))
+
+                status_text.text("Extração concluída!")
+
+                if erros_processamento:
+                    with st.expander("⚠️ Arquivos com erro de leitura"):
+                        for err_msg in erros_processamento:
+                            st.write(f"- {err_msg}")
+
+                df_nfse = pd.DataFrame(registros_nfse)
+
+                # Avisa quando a conta bruto/líquido/retenções não fechou ou ficou ambígua
+                if not df_nfse.empty:
+                    problemas = df_nfse[df_nfse["Status Validação"] != "OK"]
+                    if not problemas.empty:
+                        st.warning(
+                            f"⚠️ {len(problemas)} nota(s) com retenção que não fechou "
+                            "ou ficou ambígua. Confira a aba 'NFS-e Extraídas'."
+                        )
+                        st.dataframe(
+                            problemas[
+                                [
+                                    "Número da NFS-e",
+                                    "Nome da Empresa",
+                                    "Valor do Serviço",
+                                    "Valor Líquido",
+                                    "Status Validação",
+                                ]
+                            ],
+                            use_container_width=True,
+                        )
+
+                st.session_state["df_extrato"] = df_nfse
+                st.session_state["eventos_list"] = registros_eventos
+
+                # Mapeia os PDFs para o novo arquivo ZIP organizado por pastas mensais
+                zip_pdf_bytes = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
+                st.session_state["zip_pdf_bytes"] = zip_pdf_bytes
+
+                mapa_tipo_servico_xml = {}
+                if not df_nfse.empty:
+                    for _, row in df_nfse.iterrows():
+                        cod = str(row.get("Código Tributação", "") or "").strip()
+                        tipo = str(row.get("Tipo de Serviço", "") or "").strip()
+                        if cod and tipo and cod not in mapa_tipo_servico_xml:
+                            mapa_tipo_servico_xml[cod] = tipo
+                st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
+
+                mapa_contas = carregar_banco_dados_github()
+                if not df_nfse.empty:
+                    codigos_na_nf = set(df_nfse["Código Tributação"].dropna().unique())
+                    ausentes = [
+                        c
+                        for c in codigos_na_nf
+                        if c and codigo_precisa_cadastro(mapa_contas, c, modo_escolhido)
+                    ]
+                else:
+                    ausentes = []
+
+                st.session_state["codigos_ausentes"] = ausentes
+
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # EXIBIÇÃO DE RESULTADOS E MAPPINGS
+    if (
+        "df_extrato" in st.session_state
+        and st.session_state["df_extrato"] is not None
+    ):
+        modo = st.session_state.get("modo", "alterdata")
+        nome_modo = NOMES_MODO[modo]
+
+        mapa_contas = carregar_banco_dados_github()
+        df = st.session_state["df_extrato"]
+        eventos_list = st.session_state.get("eventos_list", [])
+        ausentes = st.session_state.get("codigos_ausentes", [])
+        mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
+        zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
+
+        st.info(f"Modo de processamento: **{nome_modo}**")
+
+        if ausentes:
+            st.warning(
+                f"⚠️ Foram encontrados Códigos de Tributação sem conta {nome_modo} "
+                "cadastrada no Banco de Dados!"
+            )
+
+            conta_padrao = CONTAS[modo]["debito_padrao"]
+
+            with st.form("form_novos_codigos"):
+                novos_cadastros = {}
+                for cod in ausentes:
+                    descricao_para_salvar = (
+                        mapa_contas.get(cod, {}).get("descricao")
+                        or mapa_tipo_servico_xml.get(cod, "Descrição do Serviço")
+                    )
+
+                    st.markdown(f"### 📌 Código: `{cod}`")
+                    st.info(f"📄 **Descrição do XML:** {cod} - {descricao_para_salvar}")
+
+                    nova_conta = st.text_input(
+                        f"Informe a conta débito {nome_modo} para o código {cod} "
+                        f"(deixe em branco para usar {conta_padrao}):",
+                        key=f"input_{modo}_{cod}",
+                    )
+                    novos_cadastros[cod] = {
+                        "descricao": descricao_para_salvar,
+                        "conta": nova_conta,
+                    }
+                    st.divider()
+
+                salvar_btn = st.form_submit_button("💾 Confirmar e Processar")
+
+            if salvar_btn:
+                for cod, dados in novos_cadastros.items():
+                    conta_informada = dados["conta"].strip() or conta_padrao
+                    existente = mapa_contas.get(
+                        cod, {"descricao": dados["descricao"], "conta": "", "conta_dominio": ""}
+                    )
+                    existente["descricao"] = existente.get("descricao") or dados["descricao"]
+                    if modo == "dominio":
+                        existente["conta_dominio"] = conta_informada
+                    else:
+                        existente["conta"] = conta_informada
+                    mapa_contas[cod] = existente
+
+                salvar_banco_dados_github(mapa_contas)
+                st.session_state["codigos_ausentes"] = []
+                st.success("Contas atualizadas com sucesso!")
+
+        if not st.session_state.get("codigos_ausentes"):
+
+            # ----------------------------------------------------
+            # CONTAS DOS IMPOSTOS RETIDOS (EDITÁVEIS ANTES DE GERAR)
+            # Já vêm preenchidas com os valores padrão do dicionário CONTAS.
+            # ----------------------------------------------------
+            st.subheader(f"🧾 Contas dos impostos retidos - {nome_modo}")
+            st.caption(
+                "Já vêm preenchidas com as contas padrão. Altere se necessário "
+                "(campo em branco volta para a conta padrão). "
+                "A prévia e os arquivos abaixo usam as contas informadas aqui."
+            )
+
+            padrao = CONTAS[modo]
+            campos_contas = [
+                ("credito_principal", "Fornecedores (crédito)"),
+                ("pcc", "PIS / COFINS / CSLL"),
+                ("irrf", "IRRF"),
+                ("inss", "INSS"),
+                ("iss", "ISS"),
+                ("historico", "Histórico padrão"),
+            ]
+
+            contas_editadas = dict(padrao)  # mantém também o debito_padrao
+            colunas_contas = st.columns(len(campos_contas))
+            for coluna, (chave, rotulo) in zip(colunas_contas, campos_contas):
+                with coluna:
+                    valor_digitado = st.text_input(
+                        rotulo,
+                        value=padrao[chave],
+                        key=f"conta_{modo}_{chave}",  # separado por sistema
+                    )
+                    contas_editadas[chave] = valor_digitado.strip() or padrao[chave]
+
+            df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo, contas_editadas)
+            df_substituidas = gerar_aba_substituidas(eventos_list, df)
+
+            nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
+
+            st.subheader(f"📊 Prévia - Aba {nome_aba}")
+            st.dataframe(df_lancamentos, use_container_width=True)
 
             if not df_substituidas.empty:
-                df_substituidas.to_excel(
-                    writer, index=False, sheet_name="Notas Canceladas e Substituídas"
-                )
+                st.subheader("⚠️ Notas Canceladas e Substituídas Identificadas")
+                st.dataframe(df_substituidas, use_container_width=True)
 
-            ws = writer.sheets[nome_aba]
-            for row in range(2, ws.max_row + 1):
-                cell = ws.cell(row=row, column=1)
-                cell.number_format = "dd/mm/yyyy"
+            # Monta a planilha Excel em memória
+            buffer_excel = io.BytesIO()
+            with pd.ExcelWriter(
+                buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy"
+            ) as writer:
+                df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
+                df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
 
-        # DOWNLOADS
-        st.markdown("---")
-        st.subheader("📥 Downloads Disponíveis")
-
-        if modo == "dominio":
-            lote_inicial = st.number_input(
-                "Nº do primeiro lote (Domínio)", min_value=1, value=1, step=1
-            )
-            txt_dominio = gerar_txt_dominio(df_lancamentos, lote_inicial)
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.download_button(
-                    label="📄 Baixar Layout Domínio (.txt)",
-                    data=txt_dominio,
-                    file_name="importacao_dominio.txt",
-                    mime="text/plain",
-                )
-
-            with col2:
-                st.download_button(
-                    label="📊 Baixar Planilha Domínio (.xlsx)",
-                    data=buffer_excel.getvalue(),
-                    file_name="importacao_dominio.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-
-            with col3:
-                if zip_pdf_bytes:
-                    st.download_button(
-                        label="📦 Baixar PDFs Organizados por Mês (.zip)",
-                        data=zip_pdf_bytes,
-                        file_name="NFS_PDFs_Organizados_Mensal.zip",
-                        mime="application/zip",
+                if not df_substituidas.empty:
+                    df_substituidas.to_excel(
+                        writer, index=False, sheet_name="Notas Canceladas e Substituídas"
                     )
-                else:
-                    st.info("Nenhum arquivo PDF correspondente encontrado no lote.")
 
-        else:
-            col1, col2 = st.columns(2)
+                ws = writer.sheets[nome_aba]
+                for row in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row, column=1)
+                    cell.number_format = "dd/mm/yyyy"
 
-            with col1:
-                st.download_button(
-                    label="📊 Baixar Planilha Alterdata (.xlsx)",
-                    data=buffer_excel.getvalue(),
-                    file_name="importacao_alterdata.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            # DOWNLOADS
+            st.markdown("---")
+            st.subheader("📥 Downloads Disponíveis")
+
+            if modo == "dominio":
+                lote_inicial = st.number_input(
+                    "Nº do primeiro lote (Domínio)", min_value=1, value=1, step=1
                 )
+                txt_dominio = gerar_txt_dominio(df_lancamentos, lote_inicial)
 
-            with col2:
-                if zip_pdf_bytes:
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
                     st.download_button(
-                        label="📦 Baixar PDFs Organizados por Mês (.zip)",
-                        data=zip_pdf_bytes,
-                        file_name="NFS_PDFs_Organizados_Mensal.zip",
-                        mime="application/zip",
+                        label="📄 Baixar Layout Domínio (.txt)",
+                        data=txt_dominio,
+                        file_name="importacao_dominio.txt",
+                        mime="text/plain",
                     )
-                else:
-                    st.info("Nenhum arquivo PDF correspondente encontrado no lote.")
+
+                with col2:
+                    st.download_button(
+                        label="📊 Baixar Planilha Domínio (.xlsx)",
+                        data=buffer_excel.getvalue(),
+                        file_name="importacao_dominio.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+
+                with col3:
+                    if zip_pdf_bytes:
+                        st.download_button(
+                            label="📦 Baixar PDFs Organizados por Mês (.zip)",
+                            data=zip_pdf_bytes,
+                            file_name="NFS_PDFs_Organizados_Mensal.zip",
+                            mime="application/zip",
+                        )
+                    else:
+                        st.info("Nenhum arquivo PDF correspondente encontrado no lote.")
+
+            else:
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.download_button(
+                        label="📊 Baixar Planilha Alterdata (.xlsx)",
+                        data=buffer_excel.getvalue(),
+                        file_name="importacao_alterdata.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+
+                with col2:
+                    if zip_pdf_bytes:
+                        st.download_button(
+                            label="📦 Baixar PDFs Organizados por Mês (.zip)",
+                            data=zip_pdf_bytes,
+                            file_name="NFS_PDFs_Organizados_Mensal.zip",
+                            mime="application/zip",
+                        )
+                    else:
+                        st.info("Nenhum arquivo PDF correspondente encontrado no lote.")
+
+
+
+# ============================================================
+# PÁGINA: EM DESENVOLVIMENTO
+# ============================================================
+def pagina_em_desenvolvimento():
+    if st.button("⬅️ Voltar ao menu"):
+        st.session_state["pagina"] = "menu"
+        st.rerun()
+
+    st.title("🚧 Em Desenvolvimento")
+    st.info("Este sistema ainda está sendo desenvolvido. Em breve estará disponível!")
+
+
+# ============================================================
+# MENU PRINCIPAL
+# ============================================================
+def menu_principal():
+    st.title("🗂️ Meus Sistemas")
+    st.write("Escolha o sistema que deseja usar:")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📄 SIEG XML PARA Importação", use_container_width=True):
+            st.session_state["pagina"] = "sieg"
+            st.rerun()
+    with col2:
+        if st.button("🚧 Em Desenvolvimento", use_container_width=True):
+            st.session_state["pagina"] = "dev"
+            st.rerun()
+
+
+# ============================================================
+# NAVEGAÇÃO ENTRE AS PÁGINAS
+# Para adicionar um novo sistema: crie uma função pagina_xxx(),
+# um botão no menu_principal() e uma linha aqui embaixo.
+# ============================================================
+pagina_atual = st.session_state.get("pagina", "menu")
+
+if pagina_atual == "sieg":
+    pagina_sieg_xml()
+elif pagina_atual == "dev":
+    pagina_em_desenvolvimento()
+else:
+    menu_principal()
