@@ -699,7 +699,7 @@ def pagina_sieg_xml():
         st.session_state["pagina"] = "menu"
         st.rerun()
 
-    st.title("📄 SIEG XML PARA Importação")
+    st.title("📄 SIEG XML PARA IMPORTAÇÃO")
     st.write(
         "Faça o upload dos arquivos **XML**, **PDF** ou de arquivos **ZIP** contendo os documentos."
     )
