@@ -60,7 +60,6 @@ def parse_itau(texto_completo):
     linhas = [l.strip() for l in texto_completo.split('\n') if l.strip()]
     dados = []
 
-    # Descarta APENAS linhas de posições e saldos de controle (não movimentações)
     saldos_informativos = [
         "SALDO ANTERIOR", "SALDO TOTAL", "SALDO MOVIMENTAÇÃO", 
         "SALDO BLOQUEADO", "SALDO DISPONÍVEL", "SALDO APLIC. AUT."
@@ -72,11 +71,9 @@ def parse_itau(texto_completo):
             data = match_data.group(1)
             resto = match_data.group(2).strip()
 
-            # Descarta se for apenas informação de saldo acumulado
             if any(term in resto.upper() for term in saldos_informativos):
                 continue
 
-            # Extrai o valor do final da linha
             match_valor = re.search(r'([-\+]?\s*[\d\.]+\,\d{2})$', resto)
             if match_valor:
                 valor_str = match_valor.group(1).replace(" ", "")
@@ -94,6 +91,7 @@ def parse_cora(texto_completo):
     conta = match_cc.group(1) if match_cc else "3715423-5"
 
     dados = []
+    # Limpa barras verticais e espaços no início das linhas
     linhas = [re.sub(r'^\s*\|\s*', '', l).strip() for l in texto_completo.split('\n') if l.strip()]
 
     i = 0
@@ -101,29 +99,38 @@ def parse_cora(texto_completo):
     while i < len(linhas):
         line = linhas[i]
 
+        # Identifica cabeçalhos de data DD/MM/AAAA
         if re.match(r'^\d{2}/\d{2}/\d{4}$', line):
-            data_atual = line
+            # Ignora o intervalo do topo "01/08/2026 a 31/08/2026"
+            if i + 1 < len(linhas) and " a " not in line:
+                data_atual = line
             i += 1
             continue
 
+        # Procura por linhas com valor do Cora (ex: - R$ 28,00 ou + R$ 10.000,00)
         match_val = re.search(r'([+-])\s*R\$\s*([\d\.,]+)', line)
-        if match_val and data_atual:
+        if match_val and data_atual and "Total" not in line and "Saldo" not in line:
             sinal = match_val.group(1)
             val_num = match_val.group(2)
             valor_str = f"-{val_num}" if sinal == "-" else val_num
 
+            # Coleta as linhas de descrição acima do valor
             bloco_desc = []
             j = i - 1
             while j >= 0:
                 prev_line = linhas[j]
-                if re.match(r'^\d{2}/\d{2}/\d{4}$', prev_line) or "Saldo do dia" in prev_line or re.search(r'R\$\s*[\d\.,]+', prev_line):
+                if (re.match(r'^\d{2}/\d{2}/\d{4}$', prev_line) or 
+                    "Saldo do dia" in prev_line or 
+                    re.search(r'[+-]\s*R\$\s*[\d\.,]+', prev_line) or
+                    "Transações" in prev_line or
+                    "Extrato do período" in prev_line):
                     break
                 bloco_desc.insert(0, prev_line)
                 j -= 1
 
             desc_bruta = " ".join(bloco_desc).strip()
 
-            if "Saldo do dia" not in line and "Saldo do dia" not in desc_bruta:
+            if desc_bruta and "Saldo" not in desc_bruta and "Total" not in desc_bruta:
                 desc_final = tratar_descricao_com_cnpj(desc_bruta)
                 dados.append({"DATA": data_atual, "VALOR": valor_str, "DESCRIÇÃO": desc_final})
 
