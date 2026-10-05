@@ -12,8 +12,46 @@ from github import Github
 import pandas as pd
 import streamlit as st
 
-# Leitor da planilha "Relação" do Portal Nacional (arquivo do leitor de Excel)
-from nfse_excel import extrair_nfse_excel
+# ------------------------------------------------------------
+# Leitor da planilha "Relação" do Portal Nacional.
+# Localiza sozinho o arquivo .py da pasta que define extrair_nfse_excel,
+# então funciona seja qual for o nome que você deu a esse arquivo.
+# ------------------------------------------------------------
+def _carregar_leitor_excel():
+    import importlib
+    import importlib.util
+
+    pasta = os.path.dirname(os.path.abspath(__file__))
+    meu_nome = os.path.splitext(os.path.basename(__file__))[0]
+
+    candidatos = []
+    for arq in sorted(os.listdir(pasta)):
+        nome, ext = os.path.splitext(arq)
+        if ext != ".py" or nome in (meu_nome, "app"):
+            continue
+        try:
+            with open(os.path.join(pasta, arq), encoding="utf-8") as f:
+                if "def extrair_nfse_excel" in f.read():
+                    candidatos.append(nome)
+        except OSError:
+            continue
+
+    for nome in candidatos:
+        try:
+            return importlib.import_module(nome).extrair_nfse_excel
+        except Exception:
+            continue
+
+    def _indisponivel(*args, **kwargs):
+        raise RuntimeError(
+            "Arquivo do leitor de Excel não encontrado na pasta do app "
+            "(precisa conter a função extrair_nfse_excel)."
+        )
+
+    return _indisponivel
+
+
+extrair_nfse_excel = _carregar_leitor_excel()
 
 PASTA_BANCOS = "planos_empresas"
 ARQUIVO_EMPRESAS_JSON = os.path.join(PASTA_BANCOS, "empresas.json")
