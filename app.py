@@ -7,11 +7,10 @@ from usuarios import USUARIOS_PERMITIDOS
 
 st.set_page_config(page_title="Meus Sistemas", page_icon="🗂️", layout="wide")
 
-# Esconder a barra de ferramentas superior completa do Streamlit
+# ESCONDER BARRA SUPERIOR, GITHUB, TRÊS PONTOS E RODAPÉ
 st.markdown(
     """
     <style>
-    /* Oculta o cabeçalho inteiro e a barra de ações/ferramentas */
     header {visibility: hidden !important;}
     .stAppHeader {display: none !important;}
     [data-testid="stHeader"] {display: none !important;}
@@ -74,7 +73,7 @@ def selecionar_plano_de_contas():
     with col_sel:
         opcoes_emp = []
         for cod, d in empresas.items():
-            cnpj_str = f" | CNPJ: {d.get('cnpj', 'N/I')}" if d.get('cnpj') else ""
+            cnpj_str = f" | CNPJ: {limpar_cnpj(d.get('cnpj', 'N/I'))}" if d.get('cnpj') else ""
             criador_str = USUARIOS_PERMITIDOS.get(d.get('criador'), 'Desconhecido')
             opcoes_emp.append(f"{cod} - {d['nome']}{cnpj_str} (Criador: {criador_str})")
 
@@ -93,7 +92,7 @@ def selecionar_plano_de_contas():
                 if cod_emp and cnpj_emp and nome_emp:
                     st.session_state["empresas_planos"][cod_emp] = {
                         "nome": nome_emp,
-                        "cnpj": cnpj_emp.strip(),
+                        "cnpj": limpar_cnpj(cnpj_emp),
                         "criador": user_id
                     }
                     salvar_empresas_github(st.session_state["empresas_planos"])
@@ -154,7 +153,7 @@ def pagina_alterar_plano_de_contas():
             col_tit, col_del_emp = st.columns([3, 1])
             with col_del_emp:
                 with st.popover("🗑️ Apagar Empresa / Plano", use_container_width=True):
-                    st.warning("⚠️ Esta ação vai apagar permanentemente esta empresa e o plano de contas dela!")
+                    st.warning("⚠️️ Esta ação vai apagar permanentemente esta empresa e o plano de contas dela!")
                     st.write(f"Empresa Código: **{cod_emp_ativo}**")
                     if st.button("Confirmar Exclusão Definitiva", type="primary", key="btn_confirm_del_emp"):
                         if deletar_empresa_completa_github(cod_emp_ativo, st.session_state["empresas_planos"]):
@@ -405,7 +404,7 @@ elif pagina_atual == "excel_nfse":
                         st.divider()
 
                 else:
-                    st.error(f"⚠️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
+                    st.error(f"⚠️️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
 
             else:
                 st.subheader(f"🧾 Contas dos Impostos e Contrapartida - {nome_modo}")
