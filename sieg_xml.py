@@ -405,17 +405,17 @@ def extrair_xml(caminho_ou_conteudo):
     data_competencia = get_text(root, "dCompet") or get_text(root, "DataEmissao")
 
     emit_node = find_tag(root, "emit") or find_tag(root, "PrestadorServico") or find_tag(root, "Prestador")
-    
+
     nome_empresa = (
-        get_text(emit_node, "xNome") 
-        or get_text(emit_node, "RazaoSocial") 
+        get_text(emit_node, "xNome")
+        or get_text(emit_node, "RazaoSocial")
         or get_text(root, "xNome")
     )
-    
+
     cnpj_prestador = (
-        get_text(emit_node, "CNPJ") 
-        or get_text(emit_node, "Cnpj") 
-        or get_text(root, "CNPJ") 
+        get_text(emit_node, "CNPJ")
+        or get_text(emit_node, "Cnpj")
+        or get_text(root, "CNPJ")
         or get_text(root, "Cnpj")
     )
 
@@ -749,9 +749,6 @@ def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
 
 
 # ============================================================
-# PÁGINA STREAMLIT SIEG XML
-# ============================================================
-# ============================================================
 # EMPRESA DE EXEMPLO POR CÓDIGO DE TRIBUTAÇÃO
 # (ajuda a classificar cada código: mostra uma empresa que o usa)
 # ============================================================
@@ -784,7 +781,7 @@ def tabela_codigos_lote(df, mapa_contas, modo, eh_receita=False, mapa_descricoes
     nome_modo = NOMES_MODO.get(modo, modo)
     linhas = []
     for cod, grupo in df.groupby(df["Código Tributação"].astype(str).str.strip()):
-        if not cod:
+        if not cod or cod.lower() == "nan":
             continue
         linhas.append({
             "Código": cod,
@@ -796,6 +793,106 @@ def tabela_codigos_lote(df, mapa_contas, modo, eh_receita=False, mapa_descricoes
     return pd.DataFrame(linhas)
 
 
+def editor_codigos_lote(df, mapa_contas, caminho_arquivo_bd, modo, eh_receita, eh_dono,
+                        mapa_descricoes=None, chave_estado="lote"):
+    """
+    Mostra a tabela de códigos do lote. O dono do plano edita a coluna da conta
+    direto na tabela e salva tudo com UM botão. Retorna a lista de códigos que
+    ainda estão sem conta cadastrada.
+    """
+    mapa_descricoes = mapa_descricoes or {}
+    if df is None or df.empty or "Código Tributação" not in df.columns:
+        return []
+
+    if st.session_state.pop(f"codigos_salvos_ok_{chave_estado}", False):
+        st.success("Contas salvas no plano de contas!")
+
+    nome_modo = NOMES_MODO.get(modo, modo)
+    tipo_conta = "Receita" if eh_receita else "Despesa"
+    col_conta = f"Conta {nome_modo} ({tipo_conta})"
+    rotulo_emp = "Cliente de exemplo" if eh_receita else "Empresa de exemplo"
+    chave_conta = (
+        ("conta_dominio_rec" if eh_receita else "conta_dominio")
+        if modo == "dominio"
+        else ("conta_rec" if eh_receita else "conta")
+    )
+    conta_padrao = CONTAS[modo]["credito_receita"] if eh_receita else CONTAS[modo]["debito_padrao"]
+    exemplos = empresa_exemplo_por_codigo(df, eh_receita)
+
+    linhas, ausentes = [], []
+    for cod, grupo in df.groupby(df["Código Tributação"].astype(str).str.strip()):
+        if not cod or cod.lower() == "nan":
+            continue
+        falta = codigo_precisa_cadastro(mapa_contas, cod, modo, eh_receita=eh_receita)
+        if falta:
+            ausentes.append(cod)
+        atual = str(mapa_contas.get(cod, {}).get(chave_conta, "") or "").strip()
+        servico = mapa_contas.get(cod, {}).get("descricao") or mapa_descricoes.get(cod, "")
+        linhas.append({
+            "Código": cod,
+            "Serviço": str(servico or ""),
+            rotulo_emp: exemplos.get(cod, ""),
+            "Qtd. notas": len(grupo),
+            "Situação": "⚠️ Falta cadastrar" if falta else "✅ Cadastrada",
+            col_conta: atual if atual else (conta_padrao if eh_dono else "— não cadastrada —"),
+        })
+
+    df_tab = pd.DataFrame(linhas)
+    if df_tab.empty:
+        return []
+
+    with st.expander("📋 Códigos de tributação deste lote (com empresa de exemplo)", expanded=True):
+        if not eh_dono:
+            st.dataframe(df_tab, use_container_width=True, hide_index=True)
+            return ausentes
+
+        st.caption(
+            f"Ajuste a coluna **{col_conta}** direto na tabela (dois cliques na célula) "
+            "e clique em **Salvar contas** no final. Nas linhas ⚠️ já vem a conta padrão sugerida."
+        )
+        versao = st.session_state.get(f"ver_codigos_{chave_estado}", 0)
+        editado = st.data_editor(
+            df_tab,
+            hide_index=True,
+            use_container_width=True,
+            num_rows="fixed",
+            disabled=[c for c in df_tab.columns if c != col_conta],
+            key=f"editor_codigos_{chave_estado}_{modo}_{int(eh_receita)}_{versao}",
+            column_config={col_conta: st.column_config.TextColumn(col_conta)},
+        )
+
+        if st.button("💾 Salvar contas", type="primary", key=f"btn_salvar_codigos_{chave_estado}"):
+            alterou = False
+            for _, r in editado.iterrows():
+                cod = str(r["Código"]).strip()
+                nova = limpar_conta(r[col_conta])
+                existente = mapa_contas.get(cod)
+                if existente is None:
+                    if not nova:
+                        continue
+                    existente = {
+                        "descricao": str(r["Serviço"] or ""),
+                        "conta": "", "conta_dominio": "",
+                        "conta_rec": "", "conta_dominio_rec": "",
+                    }
+                if str(existente.get(chave_conta, "") or "").strip() != nova:
+                    existente[chave_conta] = nova
+                    mapa_contas[cod] = existente
+                    alterou = True
+            if alterou:
+                salvar_banco_dados_github(mapa_contas, caminho_arquivo_bd)
+                st.session_state[f"ver_codigos_{chave_estado}"] = versao + 1
+                st.session_state[f"codigos_salvos_ok_{chave_estado}"] = True
+                st.rerun()
+            else:
+                st.info("Nenhuma alteração para salvar.")
+
+    return ausentes
+
+
+# ============================================================
+# PÁGINA STREAMLIT SIEG XML
+# ============================================================
 def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
     st.title("📄 SIEG XML PARA Importação")
     st.write("Faça o upload dos arquivos **XML**, **PDF** ou **ZIP**.")
@@ -907,29 +1004,6 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                             mapa_tipo_servico_xml[cod] = tipo
                 st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
 
-                # Empresa de exemplo por código: despesa -> prestador (fornecedor);
-                # receita -> tomador (cliente), pois o prestador é a própria empresa.
-                mapa_empresa_exemplo = {}
-                if not df_nfse.empty:
-                    col_nome = "Nome do Tomador" if eh_receita else "Nome da Empresa"
-                    for _, row in df_nfse.iterrows():
-                        cod = str(row.get("Código Tributação", "") or "").strip()
-                        nome = str(row.get(col_nome, "") or "").strip()
-                        if cod and nome and cod not in mapa_empresa_exemplo:
-                            mapa_empresa_exemplo[cod] = nome
-                st.session_state["mapa_empresa_exemplo"] = mapa_empresa_exemplo
-
-                if not df_nfse.empty:
-                    codigos_na_nf = set(df_nfse["Código Tributação"].dropna().unique())
-                    ausentes = [
-                        c for c in codigos_na_nf
-                        if c and codigo_precisa_cadastro(mapa_contas, c, modo_escolhido, eh_receita=eh_receita)
-                    ]
-                else:
-                    ausentes = []
-
-                st.session_state["codigos_ausentes"] = ausentes
-
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     if "df_extrato" in st.session_state and st.session_state["df_extrato"] is not None:
@@ -937,20 +1011,9 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
         nome_modo = NOMES_MODO[modo]
         df = st.session_state["df_extrato"]
         eventos_list = st.session_state.get("eventos_list", [])
-        ausentes = st.session_state.get("codigos_ausentes", [])
         mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
         zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
         eh_receita = st.session_state.get("eh_receita_lote", False)
-        # Empresa de exemplo calculada direto do df (não depende de ter reprocessado
-        # depois de uma atualização do código). Despesa -> prestador; receita -> tomador.
-        mapa_empresa_exemplo = {}
-        _col_nome = "Nome do Tomador" if eh_receita else "Nome da Empresa"
-        if not df.empty and _col_nome in df.columns:
-            for _, _r in df.iterrows():
-                _cod = str(_r.get("Código Tributação", "") or "").strip()
-                _nome = str(_r.get(_col_nome, "") or "").strip()
-                if _cod and _nome and _nome.lower() != "nan" and _cod not in mapa_empresa_exemplo:
-                    mapa_empresa_exemplo[_cod] = _nome
 
         if eh_receita:
             st.success("💰 **TIPO DE OPERAÇÃO IDENTIFICADA: RECEITA (SERVIÇOS PRESTADOS)**\n\nO CNPJ da empresa é o mesmo do prestador nas notas.")
@@ -958,92 +1021,28 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
             st.info("🛒 **TIPO DE OPERAÇÃO IDENTIFICADA: DESPESA (SERVIÇOS TOMADOS)**\n\nO CNPJ da empresa é diferente do prestador nas notas.")
 
         # ------------------------------------------------------------
-        # CÓDIGOS DO LOTE + EMPRESA DE EXEMPLO (sempre visível, para
-        # ajudar a classificar cada código de tributação)
+        # TABELA EDITÁVEL DE CÓDIGOS DO LOTE (um único botão para salvar)
         # ------------------------------------------------------------
-        linhas_codigos = []
-        if not df.empty and "Código Tributação" in df.columns:
-            chave_conta = (
-                ("conta_dominio_rec" if eh_receita else "conta_dominio")
-                if modo == "dominio"
-                else ("conta_rec" if eh_receita else "conta")
-            )
-            rotulo_empresa = "Cliente de exemplo" if eh_receita else "Empresa de exemplo"
-            for cod, grupo in df.groupby(df["Código Tributação"].astype(str).str.strip()):
-                if not cod:
-                    continue
-                desc_cod = (
-                    mapa_contas.get(cod, {}).get("descricao")
-                    or mapa_tipo_servico_xml.get(cod, "")
-                )
-                linhas_codigos.append({
-                    "Código": cod,
-                    "Serviço": desc_cod,
-                    rotulo_empresa: mapa_empresa_exemplo.get(cod, ""),
-                    "Qtd. notas": len(grupo),
-                    f"Conta {nome_modo}": mapa_contas.get(cod, {}).get(chave_conta, "") or "— não cadastrada —",
-                })
-            if linhas_codigos:
-                with st.expander("📋 Códigos de tributação deste lote (com empresa de exemplo)", expanded=True):
-                    st.dataframe(pd.DataFrame(linhas_codigos), use_container_width=True, hide_index=True)
+        ausentes = editor_codigos_lote(
+            df, mapa_contas, caminho_arquivo_bd, modo, eh_receita, eh_dono,
+            mapa_descricoes=mapa_tipo_servico_xml, chave_estado="sieg",
+        )
 
         if ausentes:
             if eh_dono:
-                st.warning(f"⚠️ Existem códigos sem conta de {'RECEITA' if eh_receita else 'DESPESA'} {nome_modo} cadastrada!")
-                st.write("Configure abaixo **um a um**. Pressione **Enter** em cada caixa para salvar individualmente:")
-                
-                conta_padrao = CONTAS[modo]["credito_receita"] if eh_receita else CONTAS[modo]["debito_padrao"]
-
-                for cod in list(ausentes):
-                    desc_salvar = mapa_contas.get(cod, {}).get("descricao") or mapa_tipo_servico_xml.get(cod, "Descrição")
-                    
-                    with st.form(key=f"form_single_xml_{modo}_{cod}"):
-                        st.markdown(f"#### 📌 Código: `{cod}`")
-                        empresa_ex = mapa_empresa_exemplo.get(cod, "")
-                        rotulo_ex = "Cliente de exemplo" if eh_receita else "Empresa de exemplo"
-                        texto_info = f"📄 **Descrição:** {cod} - {desc_salvar}"
-                        if empresa_ex:
-                            texto_info += f"\n\n🏢 **{rotulo_ex}:** {empresa_ex}"
-                        st.info(texto_info)
-
-                        label_campo = f"Informe a conta Crédito (RECEITA) {nome_modo}:" if eh_receita else f"Informe a conta Débito (DESPESA) {nome_modo}:"
-                        nova_conta = st.text_input(
-                            label_campo,
-                            value=conta_padrao,
-                            key=f"input_single_xml_{modo}_{cod}",
-                        )
-                        btn_salvar_indiv = st.form_submit_button(f"💾 Salvar Conta para Código {cod}")
-
-                        if btn_salvar_indiv:
-                            c_inf = nova_conta.strip() or conta_padrao
-                            existente = mapa_contas.get(cod, {"descricao": desc_salvar, "conta": "", "conta_dominio": "", "conta_rec": "", "conta_dominio_rec": ""})
-                            existente["descricao"] = existente.get("descricao") or desc_salvar
-                            
-                            if eh_receita:
-                                if modo == "dominio":
-                                    existente["conta_dominio_rec"] = c_inf
-                                else:
-                                    existente["conta_rec"] = c_inf
-                            else:
-                                if modo == "dominio":
-                                    existente["conta_dominio"] = c_inf
-                                else:
-                                    existente["conta"] = c_inf
-
-                            mapa_contas[cod] = existente
-
-                            salvar_banco_dados_github(mapa_contas, caminho_arquivo_bd)
-                            st.session_state["codigos_ausentes"].remove(cod)
-                            st.success(f"Conta para o código {cod} salva no plano!")
-                            st.rerun()
-                    st.divider()
+                st.warning(
+                    f"⚠️ Existem códigos sem conta de {'RECEITA' if eh_receita else 'DESPESA'} {nome_modo} cadastrada. "
+                    "Confira a tabela acima e clique em **💾 Salvar contas** para liberar a prévia e os downloads."
+                )
             else:
                 st.error(f"⚠️ Os códigos `{', '.join(ausentes)}` não estão cadastrados. Solicite ao dono deste plano que adicione as contas.")
 
         else:
+            df_codigos_lote = tabela_codigos_lote(df, mapa_contas, modo, eh_receita, mapa_tipo_servico_xml)
+
             st.subheader(f"🧾 Contas dos Impostos e Conta Contrapartida - {nome_modo}")
             padrao = CONTAS[modo]
-            
+
             rotulo_principal = "Clientes (Débito)" if eh_receita else "Fornecedores (Crédito)"
             campos_contas = [
                 ("credito_principal", rotulo_principal),
@@ -1072,8 +1071,8 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
             with pd.ExcelWriter(buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy") as writer:
                 df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
                 df.drop(columns=["Nome do Tomador"], errors="ignore").to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
-                if linhas_codigos:
-                    pd.DataFrame(linhas_codigos).to_excel(writer, index=False, sheet_name="Códigos do Lote")
+                if not df_codigos_lote.empty:
+                    df_codigos_lote.to_excel(writer, index=False, sheet_name="Códigos do Lote")
                 if not df_substituidas.empty:
                     df_substituidas.to_excel(writer, index=False, sheet_name="Notas Canceladas")
 
