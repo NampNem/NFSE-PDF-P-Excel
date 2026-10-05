@@ -294,6 +294,8 @@ elif pagina_atual == "excel_nfse":
         gerar_txt_dominio,
         limpar_cnpj,
         codigo_precisa_cadastro,
+        empresa_exemplo_por_codigo,
+        tabela_codigos_lote,
         CONTAS,
         NOMES_MODO,
     )
@@ -353,10 +355,19 @@ elif pagina_atual == "excel_nfse":
             nome_modo = NOMES_MODO[modo]
             eh_receita = st.session_state.get("eh_receita_excel", False)
 
+            # Empresa de exemplo por código (despesa -> prestador; receita -> tomador)
+            mapa_empresa_exemplo = empresa_exemplo_por_codigo(df_nfse, eh_receita)
+            rotulo_exemplo = "Cliente de exemplo" if eh_receita else "Empresa de exemplo"
+            df_codigos_lote = tabela_codigos_lote(df_nfse, mapa_contas, modo, eh_receita, mapa_descricoes)
+
             if eh_receita:
                 st.success("💰 **TIPO DE OPERAÇÃO: RECEITA (SERVIÇOS PRESTADOS)**")
             else:
                 st.info("🛒 **TIPO DE OPERAÇÃO: DESPESA (SERVIÇOS TOMADOS)**")
+
+            if not df_codigos_lote.empty:
+                with st.expander("📋 Códigos de serviço deste lote (com empresa de exemplo)", expanded=True):
+                    st.dataframe(df_codigos_lote, use_container_width=True, hide_index=True)
 
             if ausentes:
                 if eh_dono:
@@ -369,7 +380,11 @@ elif pagina_atual == "excel_nfse":
                         
                         with st.form(key=f"form_single_v2_{modo}_{cod}"):
                             st.markdown(f"#### 📌 Código: `{cod}`")
-                            st.info(f"📄 **Serviço Prestado:** {cod} - {descr}")
+                            texto_info = f"📄 **Serviço Prestado:** {cod} - {descr}"
+                            empresa_ex = mapa_empresa_exemplo.get(cod, "")
+                            if empresa_ex:
+                                texto_info += f"\n\n🏢 **{rotulo_exemplo}:** {empresa_ex}"
+                            st.info(texto_info)
 
                             label_campo = f"Informe a conta Crédito (RECEITA) {nome_modo}:" if eh_receita else f"Informe a conta Débito (DESPESA) {nome_modo}:"
                             conta_in = st.text_input(
@@ -440,7 +455,9 @@ elif pagina_atual == "excel_nfse":
                 buffer_excel = io.BytesIO()
                 with pd.ExcelWriter(buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy") as writer:
                     df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
-                    df_nfse.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+                    df_nfse.drop(columns=["Nome do Tomador"], errors="ignore").to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+                    if not df_codigos_lote.empty:
+                        df_codigos_lote.to_excel(writer, index=False, sheet_name="Códigos do Lote")
 
                 st.markdown("---")
                 st.subheader("📥 Downloads Disponíveis")
