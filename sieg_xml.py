@@ -517,11 +517,11 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
 
         if eh_receita:
-            # RECEITA: Débito = Clientes (credito_principal) e Crédito = Receita de Serviços (código serviço)
+            # RECEITA: Débito = Clientes e Crédito = Receita de Serviços
             conta_deb = contas["credito_principal"]
             conta_cred = conta_credito_receita_do_banco(mapa_contas, cod_trib, modo)
         else:
-            # DESPESA: Débito = Despesa (código serviço) e Crédito = Fornecedores (credito_principal)
+            # DESPESA: Débito = Despesa e Crédito = Fornecedores
             conta_deb = conta_debito_do_banco(mapa_contas, cod_trib, modo)
             conta_cred = contas["credito_principal"]
 
@@ -836,7 +836,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                 st.session_state["eventos_list"] = registros_eventos
                 st.session_state["zip_pdf_bytes"] = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
 
-                # DETERMINA SE É RECEITA OU DESPESA COM BASE NO CNPJ
+                # DETERMINA RECEITA x DESPESA
                 cnpj_emp_sel = limpar_cnpj(st.session_state.get("empresa_ativa_cnpj", ""))
                 cnpjs_prest_lote = set(df_nfse["CNPJ Prestador"].dropna().apply(limpar_cnpj).unique()) if not df_nfse.empty else set()
                 eh_receita = bool(cnpj_emp_sel and cnpj_emp_sel in cnpjs_prest_lote)
@@ -874,7 +874,6 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
         zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
         eh_receita = st.session_state.get("eh_receita_lote", False)
 
-        # PAINEL DE IDENTIFICAÇÃO DE RECEITA OU DESPESA
         if eh_receita:
             st.success("💰 **TIPO DE OPERAÇÃO IDENTIFICADA: RECEITA (SERVIÇOS PRESTADOS)**\n\nO CNPJ da empresa é o mesmo do prestador nas notas.")
         else:
