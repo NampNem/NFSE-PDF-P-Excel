@@ -12,6 +12,9 @@ from github import Github
 import pandas as pd
 import streamlit as st
 
+# Leitor da planilha "Relação" do Portal Nacional (arquivo do leitor de Excel)
+from nfse_excel import extrair_nfse_excel
+
 PASTA_BANCOS = "planos_empresas"
 ARQUIVO_EMPRESAS_JSON = os.path.join(PASTA_BANCOS, "empresas.json")
 
@@ -755,14 +758,14 @@ def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
 # ============================================================
 def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
     st.title("📄 SIEG XML PARA Importação")
-    st.write("Faça o upload dos arquivos **XML**, **PDF** ou **ZIP**.")
+    st.write("Faça o upload dos arquivos **XML**, **Excel do portal (.xlsx)**, **PDF** ou **ZIP**.")
 
     if mapa_contas is None and caminho_arquivo_bd:
         mapa_contas = carregar_banco_dados_github(caminho_arquivo_bd)
 
     uploaded_files = st.file_uploader(
-        "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
-        type=["xml", "pdf", "zip"],
+        "Arraste ou selecione os arquivos XML, Excel (.xlsx), PDF ou ZIP aqui",
+        type=["xml", "xlsx", "pdf", "zip"],
         accept_multiple_files=True,
     )
 
@@ -779,6 +782,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
 
             temp_dir = tempfile.mkdtemp()
             xmls_para_processar = []
+            excels_para_processar = []
             pdfs_encontrados = {}
 
             for uploaded_file in uploaded_files:
@@ -790,6 +794,12 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                     with open(caminho_xml, "wb") as f:
                         f.write(uploaded_file.getbuffer())
                     xmls_para_processar.append(caminho_xml)
+
+                elif extensao == ".xlsx":
+                    caminho_xlsx = os.path.join(temp_dir, nome_arquivo)
+                    with open(caminho_xlsx, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    excels_para_processar.append(caminho_xlsx)
 
                 elif extensao == ".pdf":
                     caminho_pdf = os.path.join(temp_dir, nome_arquivo)
@@ -816,13 +826,15 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                                 caminho_completo = os.path.join(raiz, arq)
                                 if ext == ".xml":
                                     xmls_para_processar.append(caminho_completo)
+                                elif ext == ".xlsx":
+                                    excels_para_processar.append(caminho_completo)
                                 elif ext == ".pdf":
                                     nome_sem_ext = os.path.splitext(arq)[0]
                                     pdfs_encontrados[nome_sem_ext] = caminho_completo
                     except Exception as e:
                         st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
 
-            if xmls_para_processar:
+            if xmls_para_processar or excels_para_processar:
                 registros_nfse = []
                 registros_eventos = []
                 erros_processamento = []
@@ -842,7 +854,24 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                         erros_processamento.append(f"{nome_xml}: {str(err)}")
                     progress_bar.progress((i + 1) / len(xmls_para_processar))
 
+                # Planilhas "Relação" do Portal Nacional (.xlsx)
+                for caminho_xlsx in excels_para_processar:
+                    nome_xlsx = os.path.basename(caminho_xlsx)
+                    status_text.text(f"Lendo planilha: {nome_xlsx}")
+                    try:
+                        regs_excel, ignoradas_excel = extrair_nfse_excel(caminho_xlsx, formatar_valor)
+                        registros_nfse.extend(regs_excel)
+                        if ignoradas_excel:
+                            with st.expander(f"⚠️ {len(ignoradas_excel)} nota(s) ignorada(s) em {nome_xlsx}"):
+                                st.dataframe(pd.DataFrame(ignoradas_excel), use_container_width=True, hide_index=True)
+                    except Exception as err:
+                        erros_processamento.append(f"{nome_xlsx}: {str(err)}")
+
                 status_text.text("Extração concluída!")
+                if erros_processamento:
+                    with st.expander("⚠️ Arquivos com erro de leitura"):
+                        for msg in erros_processamento:
+                            st.write(f"- {msg}")
 
                 df_nfse = pd.DataFrame(registros_nfse)
                 st.session_state["df_extrato"] = df_nfse
