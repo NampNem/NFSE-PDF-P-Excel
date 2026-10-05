@@ -1,3 +1,4 @@
+
 import io
 import os
 import re
@@ -425,6 +426,449 @@ def extrair_xml(caminho_ou_conteudo):
 
 
 # ============================================================
+# LEITOR DE EXCEL SIEG
+# ============================================================
+def normalizar_nome_coluna(valor):
+    """Normaliza o nome da coluna para facilitar a identificação de layouts da SIEG."""
+    if valor is None:
+        return ""
+    texto = str(valor).strip().lower()
+    texto = (
+        texto.replace("á", "a").replace("à", "a").replace("ã", "a").replace("â", "a")
+        .replace("é", "e").replace("ê", "e")
+        .replace("í", "i")
+        .replace("ó", "o").replace("ô", "o").replace("õ", "o")
+        .replace("ú", "u").replace("ç", "c")
+    )
+    texto = re.sub(r"[^a-z0-9]+", " ", texto)
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def encontrar_coluna_excel(df, aliases):
+    """Retorna o nome real da coluna que corresponde a algum alias."""
+    if df is None or df.empty:
+        return None
+
+    mapa = {}
+    for col in df.columns:
+        mapa[normalizar_nome_coluna(col)] = col
+
+    aliases_norm = [normalizar_nome_coluna(a) for a in aliases]
+
+    # Primeiro: correspondência exata.
+    for alias in aliases_norm:
+        if alias in mapa:
+            return mapa[alias]
+
+    # Depois: coluna que contenha o alias inteiro.
+    for alias in aliases_norm:
+        if not alias:
+            continue
+        for nome_norm, nome_real in mapa.items():
+            if alias in nome_norm or nome_norm in alias:
+                return nome_real
+
+    return None
+
+
+def valor_excel_para_float(valor):
+    """Converte números do Excel, inclusive textos no padrão brasileiro."""
+    if valor is None:
+        return 0.0
+
+    try:
+        if pd.isna(valor):
+            return 0.0
+    except Exception:
+        pass
+
+    if isinstance(valor, (int, float)):
+        return float(valor)
+
+    texto = str(valor).strip()
+    if not texto:
+        return 0.0
+
+    texto = texto.replace("R$", "").replace(" ", "")
+
+    # 1.234,56 -> 1234.56
+    if "," in texto and "." in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    elif "," in texto:
+        texto = texto.replace(",", ".")
+
+    texto = re.sub(r"[^0-9.\-]", "", texto)
+
+    try:
+        return float(texto)
+    except Exception:
+        return 0.0
+
+
+def primeira_coluna_encontrada(df, aliases):
+    return encontrar_coluna_excel(df, aliases)
+
+
+def preparar_dataframe_excel_sieg(df_raw, nome_aba=""):
+    """
+    Converte uma planilha exportada pela SIEG para a mesma estrutura interna
+    usada pelo processamento dos XMLs.
+
+    Importante para o PCC:
+      CSLL = Contrib. Sociais Ret. - PIS - COFINS
+
+    Assim, quando a SIEG fornecer o total de contribuições sociais retidas,
+    o residual é tratado como CSLL.
+    """
+    if df_raw is None or df_raw.empty:
+        return None, "A planilha está vazia."
+
+    # Procura automaticamente a linha de cabeçalho nas primeiras linhas.
+    candidatos = []
+    for idx in range(min(12, len(df_raw))):
+        valores = [normalizar_nome_coluna(v) for v in df_raw.iloc[idx].tolist()]
+        qtd = sum(
+            1
+            for v in valores
+            if any(
+                termo in v
+                for termo in [
+                    "data competencia",
+                    "nome da empresa",
+                    "numero da nf",
+                    "nota fiscal",
+                    "valor do servico",
+                    "pis",
+                    "cofins",
+                    "contrib sociais",
+                    "valor liquido",
+                ]
+            )
+        )
+        candidatos.append((qtd, idx))
+
+    _, linha_cabecalho = max(candidatos, key=lambda x: x[0])
+
+    df = df_raw.iloc[linha_cabecalho + 1:].copy()
+    df.columns = [str(v).strip() if not pd.isna(v) else "" for v in df_raw.iloc[linha_cabecalho].tolist()]
+    df = df.loc[:, [c for c in df.columns if str(c).strip() and str(c).lower() != "nan"]]
+    df = df.dropna(how="all").reset_index(drop=True)
+
+    if df.empty:
+        return None, f"A aba '{nome_aba}' não possui dados após o cabeçalho."
+
+    col_data = primeira_coluna_encontrada(
+        df,
+        ["Data Competência", "Data Competencia", "Competência", "Competencia", "Data"],
+    )
+    col_empresa = primeira_coluna_encontrada(
+        df,
+        ["Nome da Empresa", "Prestador", "Fornecedor", "Razão Social", "Razao Social", "Nome"],
+    )
+    col_nota = primeira_coluna_encontrada(
+        df,
+        ["Número da NFS-e", "Numero da NFS-e", "Número NFS-e", "Numero NFS-e",
+         "Nota Fiscal", "Nº Nota", "NF", "Número da Nota", "Numero da Nota"],
+    )
+    col_cod = primeira_coluna_encontrada(
+        df,
+        ["Código Tributação", "Codigo Tributacao", "Código de Tributação",
+         "Codigo de Tributacao", "Código Tributação Nacional", "Codigo Tributacao Nacional"],
+    )
+    col_servico = primeira_coluna_encontrada(
+        df,
+        ["Valor do Serviço", "Valor do Servico", "Valor Serviço", "Valor Servico", "Valor Bruto"],
+    )
+    col_pis = primeira_coluna_encontrada(
+        df,
+        ["PIS", "PIS Retido", "Valor PIS", "PIS (R$)", "PIS Retido (R$)"],
+    )
+    col_cofins = primeira_coluna_encontrada(
+        df,
+        ["COFINS", "COFINS Retido", "Valor COFINS", "COFINS (R$)", "COFINS Retido (R$)"],
+    )
+    col_pcc_total = primeira_coluna_encontrada(
+        df,
+        [
+            "Contrib. Sociais Ret. (R$)",
+            "Contrib. Sociais Ret.",
+            "Contrib Sociais Ret",
+            "Contribuições Sociais Retidas",
+            "Contribuicoes Sociais Retidas",
+            "Contribuições Sociais",
+            "Contribuicoes Sociais",
+            "PCC",
+        ],
+    )
+    col_csll = primeira_coluna_encontrada(
+        df,
+        ["CSLL (Retida)", "CSLL Retida", "CSLL", "Valor CSLL", "CSLL (R$)"],
+    )
+    col_irrf = primeira_coluna_encontrada(
+        df,
+        ["IRRF", "IRRF Retido", "Valor IRRF", "IRRF (R$)"],
+    )
+    col_inss = primeira_coluna_encontrada(
+        df,
+        [
+            "INSS (Previdenciária)",
+            "INSS Previdenciária",
+            "INSS Previdenciaria",
+            "INSS Retido",
+            "Valor INSS",
+            "INSS (R$)",
+        ],
+    )
+    col_iss = primeira_coluna_encontrada(
+        df,
+        ["ISS", "Valor ISS", "ISS (R$)"],
+    )
+    col_iss_retido = primeira_coluna_encontrada(
+        df,
+        ["ISS Retido", "ISS Retenção", "ISS Retencao", "Valor ISS Retido", "ISS Retido (R$)"],
+    )
+    col_liquido = primeira_coluna_encontrada(
+        df,
+        ["Valor Líquido", "Valor Liquido", "Valor Líquido (R$)", "Valor Liquido (R$)"],
+    )
+    col_tipo = primeira_coluna_encontrada(
+        df,
+        ["Tipo de Serviço", "Tipo de Servico", "Descrição Serviço", "Descricao Servico",
+         "Descrição do Serviço", "Descricao do Servico", "Serviço", "Servico"],
+    )
+    col_cnpj = primeira_coluna_encontrada(
+        df,
+        ["CNPJ Prestador", "CNPJ", "CNPJ Fornecedor"],
+    )
+
+    obrigatorias = {
+        "data": col_data,
+        "empresa": col_empresa,
+        "nota": col_nota,
+        "valor do serviço": col_servico,
+    }
+
+    faltantes = [nome for nome, coluna in obrigatorias.items() if coluna is None]
+    if faltantes:
+        colunas_disponiveis = ", ".join(str(c) for c in df.columns)
+        return None, (
+            f"Não consegui identificar no Excel as colunas obrigatórias: "
+            f"{', '.join(faltantes)}. Colunas encontradas: {colunas_disponiveis}"
+        )
+
+    registros = []
+
+    for _, row in df.iterrows():
+        data = row.get(col_data)
+        empresa = str(row.get(col_empresa, "") or "").strip()
+        numero = str(row.get(col_nota, "") or "").strip()
+
+        if numero.lower() in ("nan", "none"):
+            numero = ""
+        if empresa.lower() in ("nan", "none"):
+            empresa = ""
+
+        valor_servico = valor_excel_para_float(row.get(col_servico))
+
+        if not numero and not empresa and valor_servico == 0:
+            continue
+
+        valor_pis = valor_excel_para_float(row.get(col_pis)) if col_pis else 0.0
+        valor_cofins = valor_excel_para_float(row.get(col_cofins)) if col_cofins else 0.0
+
+        # Regra específica solicitada:
+        # CSLL = Contrib. Sociais Ret. - PIS - COFINS
+        contrib_sociais = (
+            valor_excel_para_float(row.get(col_pcc_total))
+            if col_pcc_total
+            else 0.0
+        )
+
+        csll_informada = valor_excel_para_float(row.get(col_csll)) if col_csll else 0.0
+
+        if contrib_sociais > 0:
+            valor_csll = round(contrib_sociais - valor_pis - valor_cofins, 2)
+            # Pequenos resíduos negativos podem ocorrer por arredondamento.
+            if valor_csll < 0 and abs(valor_csll) <= 0.02:
+                valor_csll = 0.0
+            if valor_csll < 0:
+                valor_csll = 0.0
+        else:
+            valor_csll = csll_informada
+
+        valor_irrf = valor_excel_para_float(row.get(col_irrf)) if col_irrf else 0.0
+        valor_inss = valor_excel_para_float(row.get(col_inss)) if col_inss else 0.0
+        valor_iss = valor_excel_para_float(row.get(col_iss)) if col_iss else 0.0
+        valor_iss_ret = (
+            valor_excel_para_float(row.get(col_iss_retido))
+            if col_iss_retido
+            else 0.0
+        )
+
+        if col_liquido:
+            valor_liquido = valor_excel_para_float(row.get(col_liquido))
+        else:
+            valor_liquido = round(
+                valor_servico
+                - valor_pis
+                - valor_cofins
+                - valor_csll
+                - valor_irrf
+                - valor_inss
+                - valor_iss_ret,
+                2,
+            )
+
+        # Se o Excel não tiver coluna própria de ISS retido, o ISS não é
+        # considerado retenção apenas por existir na coluna ISS.
+        ret_pis = valor_pis > 0
+        ret_cofins = valor_cofins > 0
+        ret_csll = valor_csll > 0
+        ret_irrf = valor_irrf > 0
+        ret_inss = valor_inss > 0
+        ret_iss = valor_iss_ret > 0
+
+        lista_ret = []
+        if ret_pis:
+            lista_ret.append("PIS")
+        if ret_cofins:
+            lista_ret.append("COFINS")
+        if ret_csll:
+            lista_ret.append("CSLL")
+        if ret_irrf:
+            lista_ret.append("IRRF")
+        if ret_inss:
+            lista_ret.append("INSS")
+        if ret_iss:
+            lista_ret.append("ISS")
+
+        soma_ret = round(
+            valor_pis
+            + valor_cofins
+            + valor_csll
+            + valor_irrf
+            + valor_inss
+            + valor_iss_ret,
+            2,
+        )
+
+        diferenca = round(valor_servico - valor_liquido, 2)
+
+        # Para Excel, a validação serve como conferência. Se o líquido
+        # fechar com os impostos, fica OK; caso contrário, apenas sinaliza.
+        if abs(diferenca - soma_ret) <= 0.02:
+            status = "OK"
+        elif soma_ret == 0 and abs(diferenca) <= 0.02:
+            status = "OK"
+        else:
+            status = "Divergente (revisar)"
+
+        codigo = str(row.get(col_cod, "") if col_cod else "").strip()
+        if codigo.lower() in ("nan", "none"):
+            codigo = ""
+
+        tipo_servico = str(row.get(col_tipo, "") if col_tipo else "").strip()
+        if tipo_servico.lower() in ("nan", "none"):
+            tipo_servico = ""
+
+        cnpj = str(row.get(col_cnpj, "") if col_cnpj else "").strip()
+        if cnpj.lower() in ("nan", "none"):
+            cnpj = ""
+
+        registros.append(
+            {
+                "tipo_xml": "EXCEL",
+                "Chave NFS-e": "",
+                "Número da NFS-e": numero,
+                "Data Competência": data,
+                "CNPJ Prestador": cnpj,
+                "Nome da Empresa": empresa,
+                "Código Tributação": codigo,
+                "Tipo de Serviço": tipo_servico,
+                "Valor do Serviço": valor_servico,
+                "Valor PIS": valor_pis,
+                "PIS Retido?": "Com Retenção" if ret_pis else "Sem Retenção",
+                "Valor COFINS": valor_cofins,
+                "COFINS Retido?": "Com Retenção" if ret_cofins else "Sem Retenção",
+                "CSLL (Retida)": valor_csll,
+                "CSLL Retida?": "Com Retenção" if ret_csll else "Sem Retenção",
+                "IRRF": valor_irrf,
+                "IRRF Retido?": "Com Retenção" if ret_irrf else "Sem Retenção",
+                "INSS (Previdenciária)": valor_inss,
+                "INSS Retido?": "Com Retenção" if ret_inss else "Sem Retenção",
+                "ISS": valor_iss,
+                "ISS Retenção": valor_iss_ret,
+                "ISS Retido?": "Com Retenção" if ret_iss else "Sem Retenção",
+                "Valor Líquido": valor_liquido,
+                "Diferença Bruto-Líquido": formatar_valor(diferenca),
+                "Retenções Identificadas": (
+                    "Retenção " + "/".join(lista_ret)
+                    if lista_ret
+                    else "Sem Retenção"
+                ),
+                "Valor Total Retenções": formatar_valor(soma_ret),
+                "Status Validação": status,
+                "Combinações Encontradas": 1 if lista_ret else 0,
+            }
+        )
+
+    if not registros:
+        return None, f"A aba '{nome_aba}' não possui notas válidas para processamento."
+
+    return pd.DataFrame(registros), None
+
+
+def extrair_excel_sieg(conteudo_bytes):
+    """Lê todas as abas do Excel e encontra automaticamente a aba da SIEG."""
+    try:
+        arquivo = io.BytesIO(conteudo_bytes)
+        xls = pd.ExcelFile(arquivo)
+    except Exception as e:
+        return None, f"Não foi possível abrir o Excel: {e}"
+
+    erros = []
+    encontrados = []
+
+    for aba in xls.sheet_names:
+        try:
+            df_raw = pd.read_excel(
+                xls,
+                sheet_name=aba,
+                header=None,
+                dtype=object,
+            )
+            df_processado, erro = preparar_dataframe_excel_sieg(df_raw, aba)
+
+            if df_processado is not None and not df_processado.empty:
+                encontrados.append(df_processado)
+            elif erro:
+                erros.append(f"{aba}: {erro}")
+        except Exception as e:
+            erros.append(f"{aba}: {e}")
+
+    if not encontrados:
+        detalhe = "\n".join(erros[:8])
+        return None, (
+            "Não encontrei uma aba do Excel com o layout esperado da SIEG."
+            + (f"\n\nDetalhes:\n{detalhe}" if detalhe else "")
+        )
+
+    df_final = pd.concat(encontrados, ignore_index=True)
+
+    # Remove duplicidades quando o mesmo Excel possui a mesma nota em mais
+    # de uma aba.
+    colunas_chave = [
+        c for c in ["Número da NFS-e", "Data Competência", "Nome da Empresa", "Valor do Serviço"]
+        if c in df_final.columns
+    ]
+    if colunas_chave:
+        df_final = df_final.drop_duplicates(subset=colunas_chave, keep="first")
+
+    return df_final.reset_index(drop=True), None
+
+
+
+# ============================================================
 # GERAR LANÇAMENTOS (ALTERDATA OU DOMÍNIO)
 # ============================================================
 def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None):
@@ -695,7 +1139,8 @@ def pagina_sieg_xml():
 
     st.title("📄 SIEG XML PARA Importação")
     st.write(
-        "Faça o upload dos arquivos **XML**, **PDF** ou de arquivos **ZIP** contendo os documentos."
+        "Faça o upload dos arquivos **XML**, **Excel (.xlsx/.xls)**, **PDF** ou de arquivos **ZIP** contendo os documentos. "
+        "O Excel pode ser usado como alternativa ao XML da SIEG."
     )
 
     # ============================================================
@@ -763,8 +1208,8 @@ def pagina_sieg_xml():
     # INTERFACE STREAMLIT PRINCIPAL
     # ============================================================
     uploaded_files = st.file_uploader(
-        "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
-        type=["xml", "pdf", "zip"],
+        "Arraste ou selecione os arquivos XML, Excel, PDF ou ZIP aqui",
+        type=["xml", "xlsx", "xls", "pdf", "zip"],
         accept_multiple_files=True,
     )
 
@@ -781,6 +1226,7 @@ def pagina_sieg_xml():
 
             temp_dir = tempfile.mkdtemp()
             xmls_para_processar = []
+            excels_para_processar = []
             pdfs_encontrados = {}
 
             for uploaded_file in uploaded_files:
@@ -792,6 +1238,14 @@ def pagina_sieg_xml():
                     with open(caminho_xml, "wb") as f:
                         f.write(uploaded_file.getbuffer())
                     xmls_para_processar.append(caminho_xml)
+
+                elif extensao in (".xlsx", ".xls"):
+                    # O Excel é lido diretamente depois, mas guardamos uma
+                    # cópia temporária para manter o fluxo organizado.
+                    caminho_excel = os.path.join(temp_dir, nome_arquivo)
+                    with open(caminho_excel, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    excels_para_processar.append(caminho_excel)
 
                 elif extensao == ".pdf":
                     caminho_pdf = os.path.join(temp_dir, nome_arquivo)
@@ -820,23 +1274,29 @@ def pagina_sieg_xml():
                                 caminho_completo = os.path.join(raiz, arq)
                                 if ext == ".xml":
                                     xmls_para_processar.append(caminho_completo)
+                                elif ext in (".xlsx", ".xls"):
+                                    excels_para_processar.append(caminho_completo)
                                 elif ext == ".pdf":
                                     nome_sem_ext = os.path.splitext(arq)[0]
                                     pdfs_encontrados[nome_sem_ext] = caminho_completo
                     except Exception as e:
                         st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
 
+            registros_nfse = []
+            registros_eventos = []
+            erros_processamento = []
+
+            # --------------------------------------------------------
+            # PROCESSAMENTO DOS XMLs - fluxo original
+            # --------------------------------------------------------
             if xmls_para_processar:
-                registros_nfse = []
-                registros_eventos = []
-                erros_processamento = []
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
                 for i, caminho_xml in enumerate(xmls_para_processar):
                     nome_xml = os.path.basename(caminho_xml)
                     status_text.text(
-                        f"Processando [{i+1}/{len(xmls_para_processar)}]: {nome_xml}"
+                        f"Processando XML [{i+1}/{len(xmls_para_processar)}]: {nome_xml}"
                     )
                     try:
                         dados = extrair_xml(caminho_xml)
@@ -846,66 +1306,196 @@ def pagina_sieg_xml():
                             registros_nfse.append(dados)
                     except Exception as err:
                         erros_processamento.append(f"{nome_xml}: {str(err)}")
+
                     progress_bar.progress((i + 1) / len(xmls_para_processar))
 
-                status_text.text("Extração concluída!")
+                status_text.empty()
+                progress_bar.empty()
 
-                if erros_processamento:
-                    with st.expander("⚠️ Arquivos com erro de leitura"):
-                        for err_msg in erros_processamento:
-                            st.write(f"- {err_msg}")
+            # --------------------------------------------------------
+            # PROCESSAMENTO DOS EXCELs - novo fluxo
+            # --------------------------------------------------------
+            if excels_para_processar:
+                progress_excel = st.progress(0)
+                status_excel = st.empty()
 
-                df_nfse = pd.DataFrame(registros_nfse)
+                for i, caminho_excel in enumerate(excels_para_processar):
+                    nome_excel = os.path.basename(caminho_excel)
+                    status_excel.text(
+                        f"Processando Excel [{i+1}/{len(excels_para_processar)}]: {nome_excel}"
+                    )
 
-                # Avisa quando a conta bruto/líquido/retenções não fechou ou ficou ambígua
-                if not df_nfse.empty:
-                    problemas = df_nfse[df_nfse["Status Validação"] != "OK"]
-                    if not problemas.empty:
-                        st.warning(
-                            f"⚠️ {len(problemas)} nota(s) com retenção que não fechou "
-                            "ou ficou ambígua. Confira a aba 'NFS-e Extraídas'."
+                    try:
+                        with open(caminho_excel, "rb") as f:
+                            conteudo_excel = f.read()
+
+                        df_excel, erro_excel = extrair_excel_sieg(conteudo_excel)
+
+                        if erro_excel:
+                            erros_processamento.append(
+                                f"{nome_excel}: {erro_excel}"
+                            )
+                        elif df_excel is not None and not df_excel.empty:
+                            registros_nfse.extend(
+                                df_excel.to_dict(orient="records")
+                            )
+                    except Exception as err:
+                        erros_processamento.append(
+                            f"{nome_excel}: {str(err)}"
                         )
-                        st.dataframe(
-                            problemas[
-                                [
-                                    "Número da NFS-e",
-                                    "Nome da Empresa",
-                                    "Valor do Serviço",
-                                    "Valor Líquido",
-                                    "Status Validação",
-                                ]
-                            ],
-                            use_container_width=True,
-                        )
 
-                st.session_state["df_extrato"] = df_nfse
-                st.session_state["eventos_list"] = registros_eventos
+                    progress_excel.progress(
+                        (i + 1) / len(excels_para_processar)
+                    )
 
-                # Mapeia os PDFs para o novo arquivo ZIP organizado por pastas mensais
-                zip_pdf_bytes = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
-                st.session_state["zip_pdf_bytes"] = zip_pdf_bytes
+                status_excel.empty()
+                progress_excel.empty()
 
-                mapa_tipo_servico_xml = {}
-                if not df_nfse.empty:
-                    for _, row in df_nfse.iterrows():
-                        cod = str(row.get("Código Tributação", "") or "").strip()
-                        tipo = str(row.get("Tipo de Serviço", "") or "").strip()
-                        if cod and tipo and cod not in mapa_tipo_servico_xml:
-                            mapa_tipo_servico_xml[cod] = tipo
-                st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
+            if erros_processamento:
+                with st.expander("⚠️ Arquivos com erro de leitura"):
+                    for err_msg in erros_processamento:
+                        st.write(f"- {err_msg}")
 
-                mapa_contas = carregar_banco_dados_github()
-                if not df_nfse.empty:
-                    codigos_na_nf = set(df_nfse["Código Tributação"].dropna().unique())
-                    ausentes = [
-                        c
-                        for c in codigos_na_nf
-                        if c and codigo_precisa_cadastro(mapa_contas, c, modo_escolhido)
+            df_nfse = pd.DataFrame(registros_nfse)
+
+            if not df_nfse.empty:
+                # Garante as colunas esperadas mesmo quando a entrada foi Excel.
+                colunas_padrao = [
+                    "Chave NFS-e",
+                    "Número da NFS-e",
+                    "Data Competência",
+                    "CNPJ Prestador",
+                    "Nome da Empresa",
+                    "Código Tributação",
+                    "Tipo de Serviço",
+                    "Valor do Serviço",
+                    "Valor PIS",
+                    "PIS Retido?",
+                    "Valor COFINS",
+                    "COFINS Retido?",
+                    "CSLL (Retida)",
+                    "CSLL Retida?",
+                    "IRRF",
+                    "IRRF Retido?",
+                    "INSS (Previdenciária)",
+                    "INSS Retido?",
+                    "ISS",
+                    "ISS Retenção",
+                    "ISS Retido?",
+                    "Valor Líquido",
+                    "Diferença Bruto-Líquido",
+                    "Retenções Identificadas",
+                    "Valor Total Retenções",
+                    "Status Validação",
+                    "Combinações Encontradas",
+                ]
+
+                for coluna in colunas_padrao:
+                    if coluna not in df_nfse.columns:
+                        if coluna in (
+                            "Valor PIS",
+                            "Valor COFINS",
+                            "CSLL (Retida)",
+                            "IRRF",
+                            "INSS (Previdenciária)",
+                            "ISS",
+                            "ISS Retenção",
+                            "Valor do Serviço",
+                            "Valor Líquido",
+                        ):
+                            df_nfse[coluna] = 0.0
+                        else:
+                            df_nfse[coluna] = ""
+
+                # Remove duplicidade apenas quando XML + Excel trouxerem
+                # a mesma nota no mesmo lote.
+                chaves = [
+                    c for c in [
+                        "Número da NFS-e",
+                        "Data Competência",
+                        "Nome da Empresa",
+                        "Valor do Serviço",
                     ]
-                else:
-                    ausentes = []
+                    if c in df_nfse.columns
+                ]
+                if chaves:
+                    df_nfse = df_nfse.drop_duplicates(
+                        subset=chaves,
+                        keep="first"
+                    ).reset_index(drop=True)
 
-                st.session_state["codigos_ausentes"] = ausentes
+                # Avisa quando a conta bruto/líquido/retenções não fechou.
+                problemas = df_nfse[
+                    df_nfse["Status Validação"] != "OK"
+                ]
+                if not problemas.empty:
+                    st.warning(
+                        f"⚠️ {len(problemas)} nota(s) com retenção que não fechou "
+                        "ou ficou ambígua. Confira a aba 'NFS-e Extraídas'."
+                    )
+                    st.dataframe(
+                        problemas[
+                            [
+                                "Número da NFS-e",
+                                "Nome da Empresa",
+                                "Valor do Serviço",
+                                "Valor Líquido",
+                                "Status Validação",
+                            ]
+                        ],
+                        use_container_width=True,
+                    )
+
+            st.session_state["df_extrato"] = df_nfse
+            st.session_state["eventos_list"] = registros_eventos
+
+            # PDFs continuam sendo tratados somente quando vierem junto
+            # com XMLs. Excel não possui chave XML para o mapeamento dos PDFs.
+            zip_pdf_bytes = (
+                gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
+                if not df_nfse.empty
+                else None
+            )
+            st.session_state["zip_pdf_bytes"] = zip_pdf_bytes
+
+            mapa_tipo_servico_xml = {}
+            if not df_nfse.empty:
+                for _, row in df_nfse.iterrows():
+                    cod = str(
+                        row.get("Código Tributação", "") or ""
+                    ).strip()
+                    tipo = str(
+                        row.get("Tipo de Serviço", "") or ""
+                    ).strip()
+                    if cod and tipo and cod not in mapa_tipo_servico_xml:
+                        mapa_tipo_servico_xml[cod] = tipo
+
+            st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
+
+            mapa_contas = carregar_banco_dados_github()
+
+            if not df_nfse.empty:
+                codigos_na_nf = set(
+                    df_nfse["Código Tributação"].dropna().unique()
+                )
+                ausentes = [
+                    c
+                    for c in codigos_na_nf
+                    if c and codigo_precisa_cadastro(
+                        mapa_contas,
+                        c,
+                        modo_escolhido,
+                    )
+                ]
+            else:
+                ausentes = []
+
+            st.session_state["codigos_ausentes"] = ausentes
+
+            if df_nfse.empty:
+                st.error(
+                    "Nenhum lançamento foi encontrado nos arquivos enviados."
+                )
 
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -925,6 +1515,14 @@ def pagina_sieg_xml():
         zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
 
         st.info(f"Modo de processamento: **{nome_modo}**")
+
+        tipo_entradas = []
+        if any(str(x.get("tipo_xml", "")).upper() == "EXCEL" for x in df.to_dict(orient="records")):
+            tipo_entradas.append("Excel SIEG")
+        if any(str(x.get("tipo_xml", "")).upper() == "NFSE" for x in df.to_dict(orient="records")):
+            tipo_entradas.append("XML")
+        if tipo_entradas:
+            st.caption("Entrada processada: " + " + ".join(tipo_entradas))
 
         if ausentes:
             st.warning(
