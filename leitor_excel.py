@@ -62,9 +62,6 @@ def _data_iso(v):
 
 
 def extrair_nfse_excel(origem, formatar_valor_fn):
-    """
-    Lê a aba 'Relação' do Excel aplicando as regras exatas da Macro V2.
-    """
     xls = pd.ExcelFile(origem)
     aba = ABA_PREFERIDA if ABA_PREFERIDA in xls.sheet_names else xls.sheet_names[0]
     df = xls.parse(aba, dtype=object)
@@ -84,7 +81,6 @@ def extrair_nfse_excel(origem, formatar_valor_fn):
         situacao = _texto(row.get("Situação"))
         numero = _numero_nota(row.get("Número NFS-e"))
 
-        # Ignora canceladas ou sem número
         if situacao.lower() == "cancelada" or not numero:
             if numero:
                 ignoradas.append({
@@ -101,41 +97,30 @@ def extrair_nfse_excel(origem, formatar_valor_fn):
         v_irrf = _num(row.get("IRRF (R$)"))
         v_iss_bruto = _num(row.get("Valor do ISSQN (R$)"))
 
-        # Regra ISS Retido (V2)
         retencao_iss_texto = _texto(row.get("Retenção ISSQN"))
-        if retencao_iss_texto == "2 - Retido pelo Tomador":
-            v_iss_retido = v_iss_bruto
-        else:
-            v_iss_retido = 0.0
+        v_iss_retido = v_iss_bruto if retencao_iss_texto == "2 - Retido pelo Tomador" else 0.0
 
-        # Regra PIS / COFINS / CSLL (V2)
         descr_contrib = _texto(row.get("Descr. Contrib. Sociais Ret."))
         v_csll_bruto = _num(row.get("Contrib. Sociais Ret. (R$)"))
 
-        if descr_contrib.startswith("3"):
+        if descr_contrib.startswith("3") or descr_contrib.startswith("8") or not descr_contrib:
             v_pcc = v_csll_bruto
-            nome_contrib = "PIS/COFINS/CSLL"
-        elif descr_contrib.startswith("8"):
-            v_pcc = v_csll_bruto
-            nome_contrib = "CSLL"
-        elif descr_contrib.startswith("0"):
+            nome_contrib = "CSLL" if descr_contrib.startswith("8") else "PIS/COFINS/CSLL"
+        else:
             v_pcc = 0.0
             nome_contrib = "PIS/COFINS/CSLL"
-        else:
-            v_pcc = v_csll_bruto
-            nome_contrib = "PIS/COFINS/CSLL"
 
-        # Cálculo de retenções totais e líquido
         total_retencoes = round(v_pcc + v_inss + v_irrf + v_iss_retido, 2)
         v_liq = round(v_serv - total_retencoes, 2)
 
-        # Código de Tributação Nacional
+        # Extração do Código e da Descrição do Serviço
         cod_texto = _texto(row.get("Cód. Tributação Nacional"))
         m = re.match(r"^(\d+)\s*-?\s*(.*)$", cod_texto, re.S)
         if m:
             codigo_tributacao, tipo_servico = m.group(1), m.group(2).strip()
         else:
             codigo_tributacao, tipo_servico = cod_texto, ""
+
         if not tipo_servico:
             tipo_servico = _texto(row.get("Descrição do Serviço"))
 
