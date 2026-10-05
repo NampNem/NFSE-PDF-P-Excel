@@ -539,10 +539,8 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
             conta_deb = conta_debito_do_banco(mapa_contas, cod_trib, modo)
             conta_cred = contas["credito_principal"]
 
-        # MONTAGEM EM DUAS LINHAS COM QUEBRA DE LINHA EXPLICITA (\n)
-        linha_1 = f"{cod_trib} - {descr_servico} (NF {num_nota})".strip()
-        linha_2 = f"{nome_empresa}".strip()
-        desc_padrao = f"{linha_1}\n{linha_2}"
+        # Descrição / complemento do histórico: "NF 00000 - NOME DO PRESTADOR"
+        desc_padrao = f"NF {num_nota} - {nome_empresa}".strip()
 
         val_bruto = converter_valor(row.get("Valor do Serviço")) or 0.0
         val_liquido = converter_valor(row.get("Valor Líquido")) or 0.0
@@ -586,7 +584,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 soma_pcc += val_csll
 
             if soma_pcc > 0:
-                desc_pcc = f"Retenção PCC s/ NF {num_nota}\n{nome_empresa}"
+                desc_pcc = f"Retenção PCC s/ NF {num_nota} - {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -598,7 +596,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 })
 
             if str(row.get("IRRF Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_irrf > 0:
-                desc_irrf = f"Retenção IRRF s/ NF {num_nota}\n{nome_empresa}"
+                desc_irrf = f"Retenção IRRF s/ NF {num_nota} - {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -610,7 +608,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 })
 
             if str(row.get("INSS Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_inss > 0:
-                desc_inss = f"Retenção INSS s/ NF {num_nota}\n{nome_empresa}"
+                desc_inss = f"Retenção INSS s/ NF {num_nota} - {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -622,7 +620,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 })
 
             if str(row.get("ISS Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_iss > 0:
-                desc_iss = f"Retenção ISS s/ NF {num_nota}\n{nome_empresa}"
+                desc_iss = f"Retenção ISS s/ NF {num_nota} - {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
