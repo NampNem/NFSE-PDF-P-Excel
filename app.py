@@ -38,18 +38,21 @@ def selecionar_plano_de_contas():
     from sieg_xml import (
         carregar_banco_dados_github,
         salvar_banco_dados_github,
+        carregar_empresas_github,
+        salvar_empresas_github,
         obter_nome_arquivo_bd,
         eh_proprietario_do_banco,
         deletar_conta_do_banco
     )
 
     user_id = st.session_state["usuario_logado"]
-    if "empresas_planos" not in st.session_state:
-        st.session_state["empresas_planos"] = {}
+    
+    # Carregamento permanente da lista de empresas do GitHub
+    if "empresas_planos" not in st.session_state or not st.session_state["empresas_planos"]:
+        st.session_state["empresas_planos"] = carregar_empresas_github()
 
     st.subheader("⚙️ Seleção do Plano de Contas")
 
-    # Opção para alternar entre Empresa ou Banco Individual de qualquer usuário
     origem_plano = st.radio(
         "Origem do Plano de Contas:",
         ["Plano da Empresa (Compartilhado)", "Plano do Usuário"],
@@ -83,6 +86,10 @@ def selecionar_plano_de_contas():
                             "nome": nome_emp,
                             "criador": user_id
                         }
+                        # Salva empresas.json no GitHub
+                        salvar_empresas_github(st.session_state["empresas_planos"])
+                        
+                        # Salva o BD .xlsx em branco
                         nome_arq = obter_nome_arquivo_bd(empresa_id=cod_emp)
                         salvar_banco_dados_github({}, nome_arq)
                         st.success(f"Plano de Contas criado para {nome_emp}!")
@@ -112,7 +119,7 @@ def selecionar_plano_de_contas():
         else:
             st.info(f"👁️ Plano Ativo: `{nome_arquivo_ativo}` (**Apenas Leitura** - Pertence a outro usuário/empresa).")
 
-        # GERENCIAMENTO DE CONTAS EXISTENTES (SÓ O DONO CONSEGUE EDITAR / REMOVER)
+        # EDITAR / APAGAR CONTAS (RESTRITO AO DONO)
         if eh_dono and mapa_contas:
             with st.expander("📝 Editar ou Apagar Contas Cadastradas neste Plano"):
                 cod_sel_editar = st.selectbox("Selecione o Código do Serviço:", list(mapa_contas.keys()))
@@ -263,11 +270,10 @@ elif pagina_atual == "excel_nfse":
 
             if ausentes:
                 if eh_dono:
-                    st.warning(f"⚠️️ Existem códigos de serviço sem conta {nome_modo} cadastrada neste Plano de Contas!")
+                    st.warning(f"⚠️ Existem códigos de serviço sem conta {nome_modo} cadastrada neste Plano de Contas!")
                     st.write("Configure abaixo **um a um**. Pressione **Enter** em cada caixa para salvar individualmente:")
                     conta_padrao = CONTAS[modo]["debito_padrao"]
 
-                    # Formulários 1 por 1 individuais
                     for cod in list(ausentes):
                         descr = mapa_descricoes.get(cod, "Descrição do Serviço")
                         
