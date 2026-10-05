@@ -178,7 +178,7 @@ def garantir_pasta_local():
 
 
 def obter_caminho_relativo_bd(empresa_id):
-    """Devolve o caminho do ficheiro na pasta planos_empresas."""
+    """Devolve o caminho do arquivo na pasta planos_empresas."""
     return os.path.join(PASTA_BANCOS, f"plano_empresa_{empresa_id}.xlsx")
 
 
@@ -218,7 +218,7 @@ def salvar_empresas_github(empresas_dict):
 
 
 def eh_proprietario_do_banco(nome_arquivo, usuario_logado, empresas_planos=None):
-    if not usuario_logado:
+    if not usuario_logado or not nome_arquivo:
         return True
 
     nome_simples = os.path.basename(nome_arquivo)
@@ -292,7 +292,7 @@ def salvar_banco_dados_github(mapa, caminho_arquivo):
                     f"Criando BD: {caminho_repo}",
                     novo_conteudo,
                 )
-            st.success(f"Plano de Contas guardado no GitHub em `{caminho_repo}`!")
+            st.success(f"Plano de Contas salvo no GitHub em `{caminho_repo}`!")
         else:
             st.warning("Salvo apenas localmente (sem token configurado).")
     except Exception as e:
