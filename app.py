@@ -32,7 +32,7 @@ if "usuario_logado" not in st.session_state:
 
 
 # ============================================================
-# SELETOR E GERENCIADOR DE PLANOS DE CONTAS
+# SELETOR E GERENCIADOR DE PLANOS DE CONTAS DA PASTA PLANOS_EMPRESAS
 # ============================================================
 def selecionar_plano_de_contas():
     from sieg_xml import (
@@ -40,86 +40,66 @@ def selecionar_plano_de_contas():
         salvar_banco_dados_github,
         carregar_empresas_github,
         salvar_empresas_github,
-        obter_nome_arquivo_bd,
+        obter_caminho_relativo_bd,
         eh_proprietario_do_banco,
         deletar_conta_do_banco
     )
 
     user_id = st.session_state["usuario_logado"]
     
-    # Carregamento permanente da lista de empresas do GitHub
+    # Carrega empresas a partir da pasta planos_empresas/
     if "empresas_planos" not in st.session_state or not st.session_state["empresas_planos"]:
         st.session_state["empresas_planos"] = carregar_empresas_github()
 
-    st.subheader("⚙️ Seleção do Plano de Contas")
+    st.subheader("🏢 Seleção do Plano de Contas da Empresa")
 
-    origem_plano = st.radio(
-        "Origem do Plano de Contas:",
-        ["Plano da Empresa (Compartilhado)", "Plano do Usuário"],
-        horizontal=True
-    )
+    empresas = st.session_state["empresas_planos"]
+    col_sel, col_novo = st.columns([2, 1])
 
-    nome_arquivo_ativo = None
+    with col_sel:
+        opcoes_emp = [
+            f"{cod} - {d['nome']} (Criador: {USUARIOS_PERMITIDOS.get(d['criador'], 'Desconhecido')})" 
+            for cod, d in empresas.items()
+        ]
+        opcoes_emp.insert(0, "Selecione uma Empresa...")
+        emp_sel = st.selectbox("Selecione a Empresa:", opcoes_emp)
 
-    # 1. PLANOS POR EMPRESA
-    if origem_plano == "Plano da Empresa (Compartilhado)":
-        empresas = st.session_state["empresas_planos"]
-        col_sel, col_novo = st.columns([2, 1])
+    with col_novo:
+        st.write("")
+        with st.popover("➕ Cadastrar Nova Empresa"):
+            st.markdown("### 🏢 Criar Plano de Empresa")
+            cod_emp = st.text_input("Código da Empresa:")
+            nome_emp = st.text_input("Nome da Empresa:")
+            if st.button("Criar Plano de Contas", type="primary"):
+                if cod_emp and nome_emp:
+                    st.session_state["empresas_planos"][cod_emp] = {
+                        "nome": nome_emp,
+                        "criador": user_id
+                    }
+                    salvar_empresas_github(st.session_state["empresas_planos"])
+                    
+                    caminho_arq = obter_caminho_relativo_bd(empresa_id=cod_emp)
+                    salvar_banco_dados_github({}, caminho_arq)
+                    st.success(f"Plano de Contas criado em `{caminho_arq}`!")
+                    st.rerun()
+                else:
+                    st.error("Preencha o Código e o Nome da Empresa!")
 
-        with col_sel:
-            opcoes_emp = [
-                f"{cod} - {d['nome']} (Criador: {USUARIOS_PERMITIDOS.get(d['criador'], 'Desconhecido')})" 
-                for cod, d in empresas.items()
-            ]
-            opcoes_emp.insert(0, "Selecione uma Empresa...")
-            emp_sel = st.selectbox("Selecione a Empresa:", opcoes_emp)
+    caminho_arquivo_ativo = None
+    if emp_sel != "Selecione uma Empresa...":
+        cod_emp = emp_sel.split(" - ")[0]
+        caminho_arquivo_ativo = obter_caminho_relativo_bd(empresa_id=cod_emp)
 
-        with col_novo:
-            st.write("")
-            with st.popover("➕ Cadastrar Nova Empresa"):
-                st.markdown("### 🏢 Novo Plano de Empresa")
-                cod_emp = st.text_input("Código da Empresa:")
-                nome_emp = st.text_input("Nome da Empresa:")
-                if st.button("Criar Plano de Contas", type="primary"):
-                    if cod_emp and nome_emp:
-                        st.session_state["empresas_planos"][cod_emp] = {
-                            "nome": nome_emp,
-                            "criador": user_id
-                        }
-                        # Salva empresas.json no GitHub
-                        salvar_empresas_github(st.session_state["empresas_planos"])
-                        
-                        # Salva o BD .xlsx em branco
-                        nome_arq = obter_nome_arquivo_bd(empresa_id=cod_emp)
-                        salvar_banco_dados_github({}, nome_arq)
-                        st.success(f"Plano de Contas criado para {nome_emp}!")
-                        st.rerun()
-                    else:
-                        st.error("Preencha o Código e o Nome da Empresa!")
-
-        if emp_sel != "Selecione uma Empresa...":
-            cod_emp = emp_sel.split(" - ")[0]
-            nome_arquivo_ativo = obter_nome_arquivo_bd(empresa_id=cod_emp)
-
-    # 2. PLANOS POR USUÁRIO (VISIBILIDADE TOTAL)
-    else:
-        opcoes_usr = [f"{u_id} - {nome}" for u_id, nome in USUARIOS_PERMITIDOS.items()]
-        idx_padrao = list(USUARIOS_PERMITIDOS.keys()).index(user_id) if user_id in USUARIOS_PERMITIDOS else 0
-        usr_sel = st.selectbox("Selecione o Usuário para carregar o Plano dele:", opcoes_usr, index=idx_padrao)
-        
-        target_id = usr_sel.split(" - ")[0]
-        nome_arquivo_ativo = obter_nome_arquivo_bd(usuario_id=target_id)
-
-    if nome_arquivo_ativo:
-        eh_dono = eh_proprietario_do_banco(nome_arquivo_ativo, user_id, st.session_state["empresas_planos"])
-        mapa_contas = carregar_banco_dados_github(nome_arquivo_ativo)
+    if caminho_arquivo_ativo:
+        eh_dono = eh_proprietario_do_banco(caminho_arquivo_ativo, user_id, st.session_state["empresas_planos"])
+        mapa_contas = carregar_banco_dados_github(caminho_arquivo_ativo)
 
         if eh_dono:
-            st.success(f"🔑 Plano Ativo: `{nome_arquivo_ativo}` (Você é o **Dono** - Permissão total para editar/apagar).")
+            st.success(f"🔑 Plano Ativo: `{caminho_arquivo_ativo}` (Você é o **Dono** - Permissão total para editar e apagar).")
         else:
-            st.info(f"👁️ Plano Ativo: `{nome_arquivo_ativo}` (**Apenas Leitura** - Pertence a outro usuário/empresa).")
+            st.info(f"👁️ Plano Ativo: `{caminho_arquivo_ativo}` (**Apenas Leitura** - Pertence a outro utilizador).")
 
-        # EDITAR / APAGAR CONTAS (RESTRITO AO DONO)
+        # EDITAR / APAGAR CONTAS (EXCLUSIVO PARA O DONO)
         if eh_dono and mapa_contas:
             with st.expander("📝 Editar ou Apagar Contas Cadastradas neste Plano"):
                 cod_sel_editar = st.selectbox("Selecione o Código do Serviço:", list(mapa_contas.keys()))
@@ -142,16 +122,16 @@ def selecionar_plano_de_contas():
                             if st.button("💾 Salvar Alteração", key=f"btn_save_{cod_sel_editar}"):
                                 mapa_contas[cod_sel_editar]["conta"] = nova_cnt_alt.strip()
                                 mapa_contas[cod_sel_editar]["conta_dominio"] = nova_cnt_dom.strip()
-                                salvar_banco_dados_github(mapa_contas, nome_arquivo_ativo)
+                                salvar_banco_dados_github(mapa_contas, caminho_arquivo_ativo)
                                 st.success("Conta atualizada!")
                                 st.rerun()
                         with col_del:
                             if st.button("❌ Apagar Código", key=f"btn_del_{cod_sel_editar}"):
-                                if deletar_conta_do_banco(mapa_contas, cod_sel_editar, nome_arquivo_ativo):
+                                if deletar_conta_do_banco(mapa_contas, cod_sel_editar, caminho_arquivo_ativo):
                                     st.success(f"Código {cod_sel_editar} apagado!")
                                     st.rerun()
 
-        return mapa_contas, nome_arquivo_ativo, eh_dono
+        return mapa_contas, caminho_arquivo_ativo, eh_dono
 
     return None, None, False
 
@@ -200,13 +180,13 @@ if pagina_atual != "menu":
 # ------------------------------------------------------------
 if pagina_atual == "sieg":
     from sieg_xml import pagina_sieg_xml
-    mapa_contas, nome_arquivo_bd, eh_dono = selecionar_plano_de_contas()
+    mapa_contas, caminho_arquivo_bd, eh_dono = selecionar_plano_de_contas()
     st.markdown("---")
     if mapa_contas is not None:
-        pagina_sieg_xml(mapa_contas, nome_arquivo_bd, eh_dono)
+        pagina_sieg_xml(mapa_contas, caminho_arquivo_bd, eh_dono)
 
 # ------------------------------------------------------------
-# EXCEL NFSE (CONFIRMAÇÃO 1 POR 1 AO APERTAR ENTER)
+# EXCEL NFSE
 # ------------------------------------------------------------
 elif pagina_atual == "excel_nfse":
     from sieg_xml import (
@@ -219,7 +199,7 @@ elif pagina_atual == "excel_nfse":
     )
     from leitor_excel import extrair_nfse_excel
 
-    mapa_contas, nome_arquivo_bd, eh_dono = selecionar_plano_de_contas()
+    mapa_contas, caminho_arquivo_bd, eh_dono = selecionar_plano_de_contas()
 
     if mapa_contas is not None:
         st.markdown("---")
@@ -270,7 +250,7 @@ elif pagina_atual == "excel_nfse":
 
             if ausentes:
                 if eh_dono:
-                    st.warning(f"⚠️ Existem códigos de serviço sem conta {nome_modo} cadastrada neste Plano de Contas!")
+                    st.warning(f"⚠️️ Existem códigos de serviço sem conta {nome_modo} cadastrada neste Plano de Contas!")
                     st.write("Configure abaixo **um a um**. Pressione **Enter** em cada caixa para salvar individualmente:")
                     conta_padrao = CONTAS[modo]["debito_padrao"]
 
@@ -299,7 +279,7 @@ elif pagina_atual == "excel_nfse":
                                     existente["conta"] = c_limpa
                                 mapa_contas[cod] = existente
 
-                                salvar_banco_dados_github(mapa_contas, nome_arquivo_bd)
+                                salvar_banco_dados_github(mapa_contas, caminho_arquivo_bd)
                                 st.session_state["excel_codigos_ausentes"].remove(cod)
                                 st.success(f"Conta para o código {cod} salva com sucesso!")
                                 st.rerun()
