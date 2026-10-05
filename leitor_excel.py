@@ -1,13 +1,10 @@
 """
-Leitor de Excel de NFS-e (relação baixada do Portal Nacional, "Recebidas").
-
-Devolve os dados no mesmo formato do extrair_xml() do sieg_xml.py, para o
-resto do sistema (validação, Alterdata, Domínio, ZIP de PDFs) funcionar igual.
+Leitor de Excel de NFS-e (Aba 'Relação' do Portal Nacional) - Regras da Macro V2.
+Devolve os dados formatados para a geração de lançamentos no Alterdata/Domínio.
 """
 import numbers
 import re
 from datetime import datetime
-
 import pandas as pd
 
 ABA_PREFERIDA = "Relação"
@@ -64,10 +61,9 @@ def _data_iso(v):
     return "" if pd.isna(dt) else dt.strftime("%Y-%m-%d")
 
 
-def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
+def extrair_nfse_excel(origem, formatar_valor_fn):
     """
-    origem: caminho do arquivo .xlsx ou objeto BytesIO.
-    Retorna (registros, ignoradas).
+    Lê a aba 'Relação' do Excel aplicando as regras exatas da Macro V2.
     """
     xls = pd.ExcelFile(origem)
     aba = ABA_PREFERIDA if ABA_PREFERIDA in xls.sheet_names else xls.sheet_names[0]
@@ -78,73 +74,62 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
     if faltando:
         raise ValueError(
             f"Colunas não encontradas na aba '{aba}': {', '.join(faltando)}. "
-            "Este não parece ser o Excel de NFS-e esperado."
+            "Verifique se o arquivo é a relação do Portal Nacional esperada."
         )
 
     registros = []
     ignoradas = []
 
     for row in df.to_dict("records"):
+        situacao = _texto(row.get("Situação"))
         numero = _numero_nota(row.get("Número NFS-e"))
-        if not numero:
+
+        # Ignora canceladas ou sem número
+        if situacao.lower() == "cancelada" or not numero:
+            if numero:
+                ignoradas.append({
+                    "Número da NFS-e": numero,
+                    "Fornecedor": _texto(row.get("Nome Prestador")),
+                    "Valor do Serviço": formatar_valor_fn(_num(row.get("Valor do Serviço (R$)"))),
+                    "Situação": situacao or "Linha em Branco"
+                })
             continue
 
         nome_empresa = _texto(row.get("Nome Prestador"))
         v_serv = _num(row.get("Valor do Serviço (R$)"))
-
-        situacao = _texto(row.get("Situação"))
-        if situacao and situacao.lower() != "normal":
-            ignoradas.append(
-                {
-                    "Número da NFS-e": numero,
-                    "Fornecedor": nome_empresa,
-                    "Valor do Serviço": formatar_valor(v_serv),
-                    "Situação": situacao,
-                }
-            )
-            continue
-
-        v_desc = _num(row.get("Desconto Incond. (R$)"))
-        v_base = round(v_serv - v_desc, 2)
-
-        v_pis = _num(row.get("PIS - Débito (R$)"))
-        v_cofins = _num(row.get("COFINS - Débito (R$)"))
-
-        v_contrib_sociais_ret = _num(row.get("Contrib. Sociais Ret. (R$)"))
-        v_csll = round(max(0.0, v_contrib_sociais_ret - v_pis - v_cofins), 2)
-
-        v_irrf = _num(row.get("IRRF (R$)"))
         v_inss = _num(row.get("Contrib. Previd. Ret. (R$)"))
-        v_iss = _num(row.get("Valor do ISSQN (R$)"))
+        v_irrf = _num(row.get("IRRF (R$)"))
+        v_iss_bruto = _num(row.get("Valor do ISSQN (R$)"))
 
-        iss_retido_planilha = _texto(row.get("Retenção ISSQN"))[:1] in ("2", "3")
+        # Regra ISS Retido (V2)
+        retencao_iss_texto = _texto(row.get("Retenção ISSQN"))
+        if retencao_iss_texto == "2 - Retido pelo Tomador":
+            v_iss_retido = v_iss_bruto
+        else:
+            v_iss_retido = 0.0
 
-        retencao_informada = (
-            v_contrib_sociais_ret
-            + v_irrf
-            + v_inss
-            + (v_iss if iss_retido_planilha else 0.0)
-        )
-        v_liq = round(v_base - retencao_informada, 2)
+        # Regra PIS / COFINS / CSLL (V2)
+        descr_contrib = _texto(row.get("Descr. Contrib. Sociais Ret."))
+        v_csll_bruto = _num(row.get("Contrib. Sociais Ret. (R$)"))
 
-        impostos = {
-            "IRRF": v_irrf,
-            "PIS": v_pis,
-            "COFINS": v_cofins,
-            "CSLL": v_csll,
-            "INSS": v_inss,
-            "ISS": v_iss,
-        }
-        retidos, status_validacao, qtd_comb = validar_retencoes(
-            v_base, v_liq, impostos
-        )
+        if descr_contrib.startswith("3"):
+            v_pcc = v_csll_bruto
+            nome_contrib = "PIS/COFINS/CSLL"
+        elif descr_contrib.startswith("8"):
+            v_pcc = v_csll_bruto
+            nome_contrib = "CSLL"
+        elif descr_contrib.startswith("0"):
+            v_pcc = 0.0
+            nome_contrib = "PIS/COFINS/CSLL"
+        else:
+            v_pcc = v_csll_bruto
+            nome_contrib = "PIS/COFINS/CSLL"
 
-        lista_ret = [n for n in impostos if retidos[n]]
-        texto_retencoes = (
-            "Retenção " + "/".join(lista_ret) if lista_ret else "Sem Retenção"
-        )
-        diferenca = round(v_base - v_liq, 2)
+        # Cálculo de retenções totais e líquido
+        total_retencoes = round(v_pcc + v_inss + v_irrf + v_iss_retido, 2)
+        v_liq = round(v_serv - total_retencoes, 2)
 
+        # Código de Tributação Nacional
         cod_texto = _texto(row.get("Cód. Tributação Nacional"))
         m = re.match(r"^(\d+)\s*-?\s*(.*)$", cod_texto, re.S)
         if m:
@@ -162,37 +147,35 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
         else:
             cnpj_formatado = ""
 
-        registros.append(
-            {
-                "tipo_xml": "NFSE",
-                "Chave NFS-e": _texto(row.get("Chave NFS-e")),
-                "Número da NFS-e": numero,
-                "Data Competência": _data_iso(row.get("Data Geração")),
-                "CNPJ Prestador": cnpj_formatado,
-                "Nome da Empresa": nome_empresa,
-                "Código Tributação": codigo_tributacao,
-                "Tipo de Serviço": tipo_servico,
-                "Valor do Serviço": v_serv,
-                "Valor PIS": impostos["PIS"] if retidos["PIS"] else 0.0,
-                "PIS Retido?": "Com Retenção" if retidos["PIS"] else "Sem Retenção",
-                "Valor COFINS": impostos["COFINS"] if retidos["COFINS"] else 0.0,
-                "COFINS Retido?": "Com Retenção" if retidos["COFINS"] else "Sem Retenção",
-                "CSLL (Retida)": impostos["CSLL"] if retidos["CSLL"] else 0.0,
-                "CSLL Retida?": "Com Retenção" if retidos["CSLL"] else "Sem Retenção",
-                "IRRF": impostos["IRRF"] if retidos["IRRF"] else 0.0,
-                "IRRF Retido?": "Com Retenção" if retidos["IRRF"] else "Sem Retenção",
-                "INSS (Previdenciária)": impostos["INSS"] if retidos["INSS"] else 0.0,
-                "INSS Retido?": "Com Retenção" if retidos["INSS"] else "Sem Retenção",
-                "ISS": v_iss,
-                "ISS Retenção": impostos["ISS"] if retidos["ISS"] else 0.0,
-                "ISS Retido?": "Com Retenção" if retidos["ISS"] else "Sem Retenção",
-                "Valor Líquido": v_liq,
-                "Diferença Bruto-Líquido": formatar_valor(diferenca),
-                "Retenções Identificadas": texto_retencoes,
-                "Valor Total Retenções": formatar_valor(diferenca),
-                "Status Validação": status_validacao,
-                "Combinações Encontradas": qtd_comb,
-            }
-        )
+        registros.append({
+            "tipo_xml": "NFSE",
+            "Chave NFS-e": _texto(row.get("Chave NFS-e")),
+            "Número da NFS-e": numero,
+            "Data Competência": _data_iso(row.get("Data Geração")),
+            "CNPJ Prestador": cnpj_formatado,
+            "Nome da Empresa": nome_empresa,
+            "Código Tributação": codigo_tributacao,
+            "Tipo de Serviço": tipo_servico,
+            "Valor do Serviço": v_serv,
+            "Valor PIS": 0.0,
+            "PIS Retido?": "Sem Retenção",
+            "Valor COFINS": 0.0,
+            "COFINS Retido?": "Sem Retenção",
+            "CSLL (Retida)": v_pcc,
+            "CSLL Retida?": "Com Retenção" if v_pcc > 0 else "Sem Retenção",
+            "IRRF": v_irrf,
+            "IRRF Retido?": "Com Retenção" if v_irrf > 0 else "Sem Retenção",
+            "INSS (Previdenciária)": v_inss,
+            "INSS Retido?": "Com Retenção" if v_inss > 0 else "Sem Retenção",
+            "ISS": v_iss_bruto,
+            "ISS Retenção": v_iss_retido,
+            "ISS Retido?": "Com Retenção" if v_iss_retido > 0 else "Sem Retenção",
+            "Valor Líquido": v_liq,
+            "Diferença Bruto-Líquido": formatar_valor_fn(total_retencoes),
+            "Retenções Identificadas": nome_contrib if v_pcc > 0 else "Sem Retenção",
+            "Valor Total Retenções": formatar_valor_fn(total_retencoes),
+            "Status Validação": "OK",
+            "Combinações Encontradas": 1
+        })
 
     return registros, ignoradas
