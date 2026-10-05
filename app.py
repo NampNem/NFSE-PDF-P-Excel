@@ -1,21 +1,52 @@
 """
-Leitor de Excel de NFS-e (relação baixada do Portal Nacional, "Recebidas").
-
-Devolve os dados NO MESMO FORMATO do extrair_xml() do sieg_xml.py, para o
-resto do sistema (validação, Alterdata, Domínio, ZIP de PDFs) funcionar igual.
-
-A validação de retenções usa a MESMA função validar_retencoes() do sieg_xml.py
-(ela é recebida como parâmetro, então qualquer mudança futura nela vale aqui).
-
-Atenção: este Excel NÃO tem a coluna "Valor Líquido". Por isso o líquido é
-calculado como: Valor do Serviço - Desconto - retenções informadas na planilha.
+Aplicação Streamlit - Processador de Notas Fiscais
+Roda 100% online (Navegador / Streamlit Community Cloud)
 """
 import numbers
 import re
 from datetime import datetime
+import io
 
 import pandas as pd
+import streamlit as st
 
+# ==========================================
+# CONFIGURAÇÃO DA PÁGINA
+# ==========================================
+st.set_page_config(
+    page_title="Processador de NFS-e & XML",
+    page_icon="📄",
+    layout="wide"
+)
+
+# ==========================================
+# FUNÇÕES DE APOIO E VALIDAÇÃO (REGRAS)
+# ==========================================
+def formatar_valor(valor):
+    """Formata número para o padrão de moeda BRL (ex: R$ 1.250,50)"""
+    try:
+        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (ValueError, TypeError):
+        return "R$ 0,00"
+
+
+def validar_retencoes(base, liquido, impostos):
+    """
+    Função base para validação de retenções.
+    Mantenha ou integre com as regras exatas do seu sieg_xml.py se necessário.
+    """
+    diferenca = round(base - liquido, 2)
+    soma_impostos = round(sum(impostos.values()), 2)
+
+    retidos = {k: v > 0 for k, v in impostos.items()}
+    status = "OK" if abs(diferenca - soma_impostos) <= 0.05 else "Divergente"
+    
+    return retidos, status, 1
+
+
+# ==========================================
+# LEITOR DE EXCEL (PORTAL NACIONAL)
+# ==========================================
 ABA_PREFERIDA = "Relação"
 COLUNAS_OBRIGATORIAS = ["Número NFS-e", "Valor do Serviço (R$)"]
 
@@ -49,7 +80,6 @@ def _numero_nota(v):
     t = _texto(v)
     if not t:
         return ""
-    # Trata decimais e notação científica trazidos pelo pandas (ex: 9647.0 ou 1e+05)
     try:
         f = float(t)
         if f.is_integer():
@@ -71,13 +101,7 @@ def _data_iso(v):
     return "" if pd.isna(dt) else dt.strftime("%Y-%m-%d")
 
 
-def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
-    """
-    origem: caminho do arquivo .xlsx ou um objeto BytesIO.
-    Retorna (registros, ignoradas):
-      registros -> lista de dicts no formato do extrair_xml (notas normais)
-      ignoradas -> notas canceladas/substituídas (não entram nos lançamentos)
-    """
+def extrair_nfse_excel(origem, validar_retencoes_fn, formatar_valor_fn):
     xls = pd.ExcelFile(origem)
     aba = ABA_PREFERIDA if ABA_PREFERIDA in xls.sheet_names else xls.sheet_names[0]
     df = xls.parse(aba, dtype=object)
@@ -93,14 +117,13 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
     registros = []
     ignoradas = []
 
-    for _, row in df.iterrows():
-
+    for row in df.to_dict("records"):
         def g(coluna):
             return row.get(coluna)
 
         numero = _numero_nota(g("Número NFS-e"))
         if not numero:
-            continue  # linha em branco ou linha de TOTAL no fim da planilha
+            continue
 
         nome_empresa = _texto(g("Nome Prestador"))
         v_serv = _num(g("Valor do Serviço (R$)"))
@@ -111,32 +134,26 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
                 {
                     "Número da NFS-e": numero,
                     "Fornecedor": nome_empresa,
-                    "Valor do Serviço": formatar_valor(v_serv),
+                    "Valor do Serviço": formatar_valor_fn(v_serv),
                     "Situação": situacao,
                 }
             )
             continue
 
-        # ---- valores (mesmos campos que o extrair_xml lê do XML) ----
         v_desc = _num(g("Desconto Incond. (R$)"))
         v_base = round(v_serv - v_desc, 2)
 
-        v_pis = _num(g("PIS - Débito (R$)"))  # vPis
-        v_cofins = _num(g("COFINS - Débito (R$)"))  # vCofins
-        
-        # A coluna da planilha representa o total das contribuições sociais retidas (PCC / CSRF).
-        # A CSLL é obtida subtraindo PIS e COFINS do total de contribuições retidas.
+        v_pis = _num(g("PIS - Débito (R$)"))
+        v_cofins = _num(g("COFINS - Débito (R$)"))
         v_contrib_sociais_ret = _num(g("Contrib. Sociais Ret. (R$)"))
         v_csll = round(max(0.0, v_contrib_sociais_ret - v_pis - v_cofins), 2)
 
-        v_irrf = _num(g("IRRF (R$)"))  # vRetIRRF
-        v_inss = _num(g("Contrib. Previd. Ret. (R$)"))  # vRetCP
-        v_iss = _num(g("Valor do ISSQN (R$)"))  # vISSQN
+        v_irrf = _num(g("IRRF (R$)"))
+        v_inss = _num(g("Contrib. Previd. Ret. (R$)"))
+        v_iss = _num(g("Valor do ISSQN (R$)"))
 
-        # "2 - Retido pelo Tomador" / "3 - Retido pelo Intermediário" => ISS retido
         iss_retido_planilha = _texto(g("Retenção ISSQN"))[:1] in ("2", "3")
 
-        # A planilha não tem "Valor Líquido": calcula usando o total de contribuições retidas + demais retenções.
         retencao_informada = (
             v_contrib_sociais_ret
             + v_irrf
@@ -145,7 +162,6 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
         )
         v_liq = round(v_base - retencao_informada, 2)
 
-        # Mesma ordem e mesma função de validação do XML
         impostos = {
             "IRRF": v_irrf,
             "PIS": v_pis,
@@ -154,7 +170,9 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
             "INSS": v_inss,
             "ISS": v_iss,
         }
-        retidos, status_validacao, qtd_comb = validar_retencoes(v_base, v_liq, impostos)
+        retidos, status_validacao, qtd_comb = validar_retencoes_fn(
+            v_base, v_liq, impostos
+        )
 
         def val_ret(nome):
             return impostos[nome] if retidos[nome] else 0.0
@@ -163,10 +181,11 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
             return "Com Retenção" if retidos[nome] else "Sem Retenção"
 
         lista_ret = [n for n in impostos if retidos[n]]
-        texto_retencoes = "Retenção " + "/".join(lista_ret) if lista_ret else "Sem Retenção"
+        texto_retencoes = (
+            "Retenção " + "/".join(lista_ret) if lista_ret else "Sem Retenção"
+        )
         diferenca = round(v_base - v_liq, 2)
 
-        # ---- código e tipo do serviço: "110401 - Armazenamento, depósito..." ----
         cod_texto = _texto(g("Cód. Tributação Nacional"))
         m = re.match(r"^(\d+)\s*-?\s*(.*)$", cod_texto, re.S)
         if m:
@@ -176,7 +195,6 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
         if not tipo_servico:
             tipo_servico = _texto(g("Descrição do Serviço"))
 
-        # Formatação do CNPJ/CPF garantindo zeros à esquerda
         cnpj_limpo = re.sub(r"\D", "", _texto(g("CNPJ/CPF Prestador")))
         if len(cnpj_limpo) > 11:
             cnpj_formatado = cnpj_limpo.zfill(14)
@@ -210,12 +228,83 @@ def extrair_nfse_excel(origem, validar_retencoes, formatar_valor):
                 "ISS Retenção": val_ret("ISS"),
                 "ISS Retido?": flag("ISS"),
                 "Valor Líquido": v_liq,
-                "Diferença Bruto-Líquido": formatar_valor(diferenca),
+                "Diferença Bruto-Líquido": formatar_valor_fn(diferenca),
                 "Retenções Identificadas": texto_retencoes,
-                "Valor Total Retenções": formatar_valor(diferenca),
+                "Valor Total Retenções": formatar_valor_fn(diferenca),
                 "Status Validação": status_validacao,
                 "Combinações Encontradas": qtd_comb,
             }
         )
 
     return registros, ignoradas
+
+
+# ==========================================
+# INTERFACE ONLINE (STREAMLIT MENU)
+# ==========================================
+st.title("📄 Processador e Importador de Notas Fiscais")
+st.markdown("Selecione o tipo de arquivo de entrada para extrair os dados e validar as retenções.")
+
+# Painel Lateral (Menu)
+st.sidebar.header("Menu de Opções")
+opcao = st.sidebar.radio(
+    "Escolha a Origem dos Dados:",
+    ["Excel - Portal Nacional (NFS-e Recebidas)", "Arquivos XML / ZIP (SIEG)"]
+)
+
+st.sidebar.markdown("---")
+st.sidebar.info("Acesse a documentação das regras para verificar os campos importados.")
+
+# Conteúdo Principal
+if opcao == "Excel - Portal Nacional (NFS-e Recebidas)":
+    st.subheader("📊 Importar Excel de NFS-e Recebidas")
+    st.write("Envie a relação de notas baixadas diretamente do Portal Nacional (.xlsx).")
+
+    arquivo = st.file_uploader("Selecione a planilha Excel", type=["xlsx"])
+
+    if arquivo is not None:
+        if st.button("🚀 Processar Planilha", type="primary"):
+            with st.spinner("Lendo e validando retenções..."):
+                try:
+                    registros, ignoradas = extrair_nfse_excel(
+                        arquivo, validar_retencoes, formatar_valor
+                    )
+
+                    st.success(f"Processamento concluído com sucesso!")
+                    
+                    # Exibição dos Indicadores
+                    col1, col2 = st.columns(2)
+                    col1.metric("Notas Processadas", len(registros))
+                    col2.metric("Notas Ignoradas/Canceladas", len(ignoradas))
+
+                    # Exibição em Tabelas
+                    if registros:
+                        st.markdown("### 📝 Notas Processadas")
+                        df_registros = pd.DataFrame(registros)
+                        st.dataframe(df_registros, use_container_width=True)
+
+                        # Botão para baixar resultado consolidado
+                        csv_data = df_registros.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(
+                            label="📥 Baixar Resultado em CSV",
+                            data=csv_data,
+                            file_name="nfse_processadas.csv",
+                            mime="text/csv"
+                        )
+
+                    if ignoradas:
+                        st.markdown("### ⚠️ Notas Ignoradas / Canceladas")
+                        st.dataframe(pd.DataFrame(ignoradas), use_container_width=True)
+
+                except Exception as e:
+                    st.error(f"Erro ao processar o arquivo: {str(e)}")
+
+elif opcao == "Arquivos XML / ZIP (SIEG)":
+    st.subheader("📦 Importar XMLs / Arquivo ZIP")
+    st.write("Insira os arquivos XML ou ZIP recebidos do SIEG.")
+    
+    arquivo_xml = st.file_uploader("Selecione o arquivo XML ou ZIP", type=["xml", "zip"], accept_multiple_files=False)
+    
+    if arquivo_xml is not None:
+        if st.button("🚀 Processar XMLs", type="primary"):
+            st.info("Aguardando integração da lógica de leitura de XML (ex: sieg_xml.py).")
