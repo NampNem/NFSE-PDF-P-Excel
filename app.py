@@ -1,3 +1,52 @@
+import streamlit as st
+
+# ============================================================
+# ARQUIVO PRINCIPAL (MENU)
+# ============================================================
+st.set_page_config(page_title="Meus Sistemas", page_icon="🗂️", layout="wide")
+
+
+def menu_principal():
+    st.title("🗂️ Meus Sistemas")
+    st.write("Escolha o sistema que deseja usar:")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📄 SIEG XML PARA Importação", use_container_width=True):
+            st.session_state["pagina"] = "sieg"
+            st.rerun()
+    with col2:
+        if st.button("📊 Excel NFS-e (Portal Nacional)", use_container_width=True):
+            st.session_state["pagina"] = "excel_nfse"
+            st.rerun()
+    with col3:
+        if st.button("🏢 Empresas", use_container_width=True):
+            st.session_state["pagina"] = "empresas"
+            st.session_state["empresa_pagina"] = "lista"
+            st.rerun()
+
+
+# ============================================================
+# NAVEGAÇÃO ENTRE OS SISTEMAS
+# ============================================================
+pagina_atual = st.session_state.get("pagina", "menu")
+
+# Botão na barra lateral para voltar ao menu
+if pagina_atual != "menu":
+    if st.sidebar.button("⬅️ Voltar ao Menu Principal"):
+        st.session_state["pagina"] = "menu"
+        st.rerun()
+
+# ------------------------------------------------------------
+# OPÇÃO 1: SIEG XML / PDF
+# ------------------------------------------------------------
+if pagina_atual == "sieg":
+    from sieg_xml import pagina_sieg_xml
+    pagina_sieg_xml()
+
+# ------------------------------------------------------------
+# OPÇÃO 2: LEITOR DE EXCEL (REGRAS V2 COM SERVIÇO PRESTADO)
+# ------------------------------------------------------------
 elif pagina_atual == "excel_nfse":
     import io
     import pandas as pd
@@ -34,7 +83,6 @@ elif pagina_atual == "excel_nfse":
                 df_nfse = pd.DataFrame(registros)
                 mapa_contas = carregar_banco_dados_github()
 
-                # Mapeia código -> descrição do serviço da planilha
                 mapa_descricoes = {}
                 codigos_ausentes = []
                 
@@ -149,3 +197,16 @@ elif pagina_atual == "excel_nfse":
                     st.download_button("📊 Baixar Planilha Domínio (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_dominio_excel.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
                 st.download_button("📊 Baixar Planilha Alterdata (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_alterdata_excel.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ------------------------------------------------------------
+# OPÇÃO 3: EMPRESAS
+# ------------------------------------------------------------
+elif pagina_atual == "empresas":
+    from empresas import pagina_empresas
+    pagina_empresas()
+
+# ------------------------------------------------------------
+# MENU INICIAL
+# ------------------------------------------------------------
+else:
+    menu_principal()
