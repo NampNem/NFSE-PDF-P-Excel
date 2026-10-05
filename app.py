@@ -36,7 +36,7 @@ if "usuario_logado" not in st.session_state:
 
 
 # ============================================================
-# SELETOR E GERENCIADOR DE PLANOS DE CONTAS
+# SELETOR E GERENCIADOR DE PLANOS DE CONTAS (EXCLUSIVO POR EMPRESA)
 # ============================================================
 def selecionar_plano_de_contas():
     from sieg_xml import (
@@ -51,66 +51,54 @@ def selecionar_plano_de_contas():
     if "empresas_planos" not in st.session_state:
         st.session_state["empresas_planos"] = {}
 
-    st.subheader("⚙️ Configuração do Plano de Contas")
+    st.subheader("⚙️ Seleção do Plano de Contas por Empresa")
 
-    tipo_plano = st.radio(
-        "Origem do Plano de Contas:",
-        ["Plano de Outro Usuário", "Plano de Empresa"],
-        horizontal=True
-    )
+    empresas = st.session_state["empresas_planos"]
+    col_sel, col_novo = st.columns([2, 1])
+
+    with col_sel:
+        opcoes_emp = [
+            f"{cod} - {d['nome']} (Criador: {USUARIOS_PERMITIDOS.get(d['criador'], 'Desconhecido')})" 
+            for cod, d in empresas.items()
+        ]
+        opcoes_emp.insert(0, "Selecione uma Empresa...")
+        emp_sel = st.selectbox("Selecione a Empresa para carregar o Plano de Contas:", opcoes_emp)
+
+    with col_novo:
+        st.write("")
+        with st.popover("➕ Cadastrar Nova Empresa"):
+            st.markdown("### 🏢 Novo Plano de Empresa")
+            cod_emp = st.text_input("Código da Empresa:")
+            nome_emp = st.text_input("Nome da Empresa:")
+            if st.button("Criar Plano de Contas", type="primary"):
+                if cod_emp and nome_emp:
+                    st.session_state["empresas_planos"][cod_emp] = {
+                        "nome": nome_emp,
+                        "criador": user_id
+                    }
+                    nome_arq = obter_nome_arquivo_bd(empresa_id=cod_emp)
+                    salvar_banco_dados_github({}, nome_arq)
+                    st.success(f"Plano de Contas criado para {nome_emp}!")
+                    st.rerun()
+                else:
+                    st.error("Preencha o Código e o Nome da Empresa!")
 
     nome_arquivo_ativo = None
-
-    if tipo_plano == "Plano de Outro Usuário":
-        opcoes_user = [f"{u_id} - {nome}" for u_id, nome in USUARIOS_PERMITIDOS.items()]
-        idx_padrao = list(USUARIOS_PERMITIDOS.keys()).index(user_id) if user_id in USUARIOS_PERMITIDOS else 0
-        
-        user_sel = st.selectbox("Selecione o usuário dono do Plano de Contas:", opcoes_user, index=idx_padrao)
-        target_id = user_sel.split(" - ")[0]
-        nome_arquivo_ativo = obter_nome_arquivo_bd(usuario_id=target_id)
-
-    else:
-        empresas = st.session_state["empresas_planos"]
-        col_sel, col_novo = st.columns([2, 1])
-
-        with col_sel:
-            opcoes_emp = [f"{cod} - {d['nome']} (Criador: {USUARIOS_PERMITIDOS.get(d['criador'], 'Desconhecido')})" for cod, d in empresas.items()]
-            opcoes_emp.insert(0, "Selecione uma Empresa...")
-            emp_sel = st.selectbox("Selecione o Plano da Empresa:", opcoes_emp)
-
-        with col_novo:
-            st.write("---")
-            with st.popover("➕ Cadastrar Empresa"):
-                cod_emp = st.text_input("Código da Empresa:")
-                nome_emp = st.text_input("Nome da Empresa:")
-                if st.button("Criar Plano"):
-                    if cod_emp and nome_emp:
-                        st.session_state["empresas_planos"][cod_emp] = {
-                            "nome": nome_emp,
-                            "criador": user_id
-                        }
-                        nome_arq = obter_nome_arquivo_bd(empresa_id=cod_emp)
-                        salvar_banco_dados_github({}, nome_arq)
-                        st.success("Plano de Contas criado!")
-                        st.rerun()
-                    else:
-                        st.error("Preencha Código e Nome!")
-
-        if emp_sel != "Selecione uma Empresa...":
-            cod_emp = emp_sel.split(" - ")[0]
-            nome_arquivo_ativo = obter_nome_arquivo_bd(empresa_id=cod_emp)
+    if emp_sel != "Selecione uma Empresa...":
+        cod_emp = emp_sel.split(" - ")[0]
+        nome_arquivo_ativo = obter_nome_arquivo_bd(empresa_id=cod_emp)
 
     if nome_arquivo_ativo:
         eh_dono = eh_proprietario_do_banco(nome_arquivo_ativo, user_id, st.session_state["empresas_planos"])
         mapa_contas = carregar_banco_dados_github(nome_arquivo_ativo)
 
         if eh_dono:
-            st.success(f"🔑 Você é o **Dono** deste Plano de Contas (`{nome_arquivo_ativo}`). Permissão total para editar/apagar.")
+            st.success(f"🔑 Plano Ativo: `{nome_arquivo_ativo}` (Você é o **Dono** - Permissão total para editar e apagar).")
         else:
-            st.info(f"👁️ Modo **Apenas Leitura**: Você está usando o Plano de Contas de outro usuário (`{nome_arquivo_ativo}`).")
+            st.info(f"👁️ Plano Ativo: `{nome_arquivo_ativo}` (**Apenas Leitura** - Pertence a outro usuário).")
 
         if eh_dono and mapa_contas:
-            with st.expander("🗑️ Apagar/Gerenciar Contas Cadastradas"):
+            with st.expander("🗑️ Gerenciar / Apagar Contas do Plano da Empresa"):
                 cod_para_deletar = st.selectbox("Selecione o código para remover:", list(mapa_contas.keys()))
                 if st.button("❌ Confirmar Exclusão de Conta"):
                     if deletar_conta_do_banco(mapa_contas, cod_para_deletar, nome_arquivo_ativo):
@@ -155,10 +143,19 @@ if pagina_atual != "menu":
         st.session_state["pagina"] = "menu"
         st.rerun()
 
+# ------------------------------------------------------------
+# SIEG XML
+# ------------------------------------------------------------
 if pagina_atual == "sieg":
     from sieg_xml import pagina_sieg_xml
-    pagina_sieg_xml()
+    mapa_contas, nome_arquivo_bd, eh_dono = selecionar_plano_de_contas()
+    st.markdown("---")
+    if mapa_contas is not None:
+        pagina_sieg_xml(mapa_contas, nome_arquivo_bd, eh_dono)
 
+# ------------------------------------------------------------
+# EXCEL NFSE
+# ------------------------------------------------------------
 elif pagina_atual == "excel_nfse":
     from sieg_xml import (
         formatar_valor, 
@@ -169,8 +166,6 @@ elif pagina_atual == "excel_nfse":
         NOMES_MODO
     )
     from leitor_excel import extrair_nfse_excel
-
-    st.title("📊 Leitor de Excel NFS-e (Portal Nacional)")
 
     mapa_contas, nome_arquivo_bd, eh_dono = selecionar_plano_de_contas()
 
@@ -258,7 +253,7 @@ elif pagina_atual == "excel_nfse":
                             st.success("Plano de Contas Atualizado!")
                             st.rerun()
                 else:
-                    st.error(f"⚠️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está usando o plano em modo apenas leitura, solicite ao dono que cadastre esses códigos.")
+                    st.error(f"⚠️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
 
             else:
                 st.subheader(f"🧾 Contas dos Impostos Retidos - {nome_modo}")
