@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import re
 import shutil
@@ -167,8 +168,38 @@ def validar_retencoes(v_serv, v_liq, impostos, tol=0.02):
 
 
 # ============================================================
-# GERENCIAMENTO DE BANCO DE DADOS E PERMISSÕES (GITHUB)
+# GERENCIAMENTO PERMANENTE DE EMPRESAS E BD (GITHUB)
 # ============================================================
+def carregar_empresas_github():
+    if os.path.exists("empresas.json"):
+        try:
+            with open("empresas.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def salvar_empresas_github(empresas_dict):
+    with open("empresas.json", "w", encoding="utf-8") as f:
+        json.dump(empresas_dict, f, ensure_ascii=False, indent=4)
+
+    try:
+        token = st.secrets.get("GITHUB_TOKEN")
+        repo_name = st.secrets.get("REPO_NAME")
+        if token and repo_name:
+            g = Github(token)
+            repo = g.get_repo(repo_name)
+            content = json.dumps(empresas_dict, ensure_ascii=False, indent=4)
+            try:
+                contents = repo.get_contents("empresas.json")
+                repo.update_file(contents.path, "Atualizando lista de empresas", content, contents.sha)
+            except Exception:
+                repo.create_file("empresas.json", "Criando lista de empresas", content)
+    except Exception as e:
+        st.error(f"Erro ao sincronizar empresas.json com o GitHub: {e}")
+
+
 def obter_nome_arquivo_bd(usuario_id=None, empresa_id=None):
     if empresa_id:
         return f"plano_empresa_{empresa_id}.xlsx"
@@ -770,7 +801,6 @@ def pagina_sieg_xml(mapa_contas=None, nome_arquivo_bd="banco_de_dados.xlsx", eh_
                 st.write("Configure abaixo **um a um**. Pressione **Enter** em cada caixa para salvar individualmente:")
                 conta_padrao = CONTAS[modo]["debito_padrao"]
 
-                # Formulários 1 por 1 individuais
                 for cod in list(ausentes):
                     desc_salvar = mapa_contas.get(cod, {}).get("descricao") or mapa_tipo_servico_xml.get(cod, "Descrição")
                     
