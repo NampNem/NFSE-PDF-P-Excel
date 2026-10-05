@@ -12,7 +12,8 @@ from github import Github
 import pandas as pd
 import streamlit as st
 
-NOME_BANCO_DADOS = "banco_de_dados.xlsx"
+PASTA_BANCOS = "planos_empresas"
+ARQUIVO_EMPRESAS_JSON = os.path.join(PASTA_BANCOS, "empresas.json")
 
 CONTAS = {
     "alterdata": {
@@ -39,7 +40,7 @@ NOMES_MODO = {"alterdata": "Alterdata", "dominio": "Domínio"}
 
 
 # ============================================================
-# FUNÇÕES UTILITÁRIAS
+# FUNÇÕES UTILITÁRIAS DE FORMATAÇÃO E LIMPEZA
 # ============================================================
 def extrair_codigo_do_banco(valor):
     if valor is None:
@@ -168,12 +169,25 @@ def validar_retencoes(v_serv, v_liq, impostos, tol=0.02):
 
 
 # ============================================================
-# GERENCIAMENTO PERMANENTE DE EMPRESAS E BD (GITHUB)
+# GERENCIAMENTO DE PASTAS E REPOSITÓRIO GITHUB
 # ============================================================
+def garantir_pasta_local():
+    """Cria a pasta local se não existir."""
+    if not os.path.exists(PASTA_BANCOS):
+        os.makedirs(PASTA_BANCOS, exist_ok=True)
+
+
+def obter_caminho_relativo_bd(empresa_id):
+    """Devolve o caminho do ficheiro na pasta planos_empresas."""
+    return os.path.join(PASTA_BANCOS, f"plano_empresa_{empresa_id}.xlsx")
+
+
 def carregar_empresas_github():
-    if os.path.exists("empresas.json"):
+    """Carrega a lista central de empresas da pasta planos_empresas."""
+    garantir_pasta_local()
+    if os.path.exists(ARQUIVO_EMPRESAS_JSON):
         try:
-            with open("empresas.json", "r", encoding="utf-8") as f:
+            with open(ARQUIVO_EMPRESAS_JSON, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
@@ -181,7 +195,9 @@ def carregar_empresas_github():
 
 
 def salvar_empresas_github(empresas_dict):
-    with open("empresas.json", "w", encoding="utf-8") as f:
+    """Salva a lista de empresas na pasta planos_empresas no GitHub."""
+    garantir_pasta_local()
+    with open(ARQUIVO_EMPRESAS_JSON, "w", encoding="utf-8") as f:
         json.dump(empresas_dict, f, ensure_ascii=False, indent=4)
 
     try:
@@ -191,46 +207,35 @@ def salvar_empresas_github(empresas_dict):
             g = Github(token)
             repo = g.get_repo(repo_name)
             content = json.dumps(empresas_dict, ensure_ascii=False, indent=4)
+            caminho_repo = ARQUIVO_EMPRESAS_JSON.replace("\\", "/")
             try:
-                contents = repo.get_contents("empresas.json")
+                contents = repo.get_contents(caminho_repo)
                 repo.update_file(contents.path, "Atualizando lista de empresas", content, contents.sha)
             except Exception:
-                repo.create_file("empresas.json", "Criando lista de empresas", content)
+                repo.create_file(caminho_repo, "Criando lista de empresas", content)
     except Exception as e:
-        st.error(f"Erro ao sincronizar empresas.json com o GitHub: {e}")
-
-
-def obter_nome_arquivo_bd(usuario_id=None, empresa_id=None):
-    if empresa_id:
-        return f"plano_empresa_{empresa_id}.xlsx"
-    if usuario_id:
-        return f"banco_user_{usuario_id}.xlsx"
-    return "banco_de_dados.xlsx"
+        st.error(f"Erro ao salvar empresas.json no GitHub: {e}")
 
 
 def eh_proprietario_do_banco(nome_arquivo, usuario_logado, empresas_planos=None):
     if not usuario_logado:
         return True
-    if f"banco_user_{usuario_logado}.xlsx" == nome_arquivo or nome_arquivo == "banco_de_dados.xlsx":
-        return True
 
+    nome_simples = os.path.basename(nome_arquivo)
     if empresas_planos and isinstance(empresas_planos, dict):
         for cod_emp, dados in empresas_planos.items():
-            if f"plano_empresa_{cod_emp}.xlsx" == nome_arquivo:
+            if f"plano_empresa_{cod_emp}.xlsx" == nome_simples:
                 return str(dados.get("criador")) == str(usuario_logado)
 
     return False
 
 
-def carregar_banco_dados_github(nome_arquivo="banco_de_dados.xlsx"):
+def carregar_banco_dados_github(caminho_arquivo):
+    garantir_pasta_local()
     mapa = {}
-    if os.path.exists(nome_arquivo):
+    if os.path.exists(caminho_arquivo):
         try:
-            if nome_arquivo.endswith(".csv"):
-                df_bd = pd.read_csv(nome_arquivo, header=None)
-            else:
-                df_bd = pd.read_excel(nome_arquivo, header=None)
-
+            df_bd = pd.read_excel(caminho_arquivo, header=None)
             for _, r in df_bd.iterrows():
                 cod = extrair_codigo_do_banco(r.iloc[0])
                 descricao = extrair_descricao_do_banco(r.iloc[0])
@@ -243,11 +248,12 @@ def carregar_banco_dados_github(nome_arquivo="banco_de_dados.xlsx"):
                         "conta_dominio": conta_dom,
                     }
         except Exception as e:
-            st.error(f"Erro ao carregar o Banco de Dados ({nome_arquivo}): {e}")
+            st.error(f"Erro ao carregar o Plano de Contas ({caminho_arquivo}): {e}")
     return mapa
 
 
-def salvar_banco_dados_github(mapa, nome_arquivo="banco_de_dados.xlsx"):
+def salvar_banco_dados_github(mapa, caminho_arquivo):
+    garantir_pasta_local()
     linhas = [
         (
             montar_celula_banco(cod, dados.get("descricao", "")),
@@ -257,7 +263,7 @@ def salvar_banco_dados_github(mapa, nome_arquivo="banco_de_dados.xlsx"):
         for cod, dados in mapa.items()
     ]
     df_bd = pd.DataFrame(linhas)
-    df_bd.to_excel(nome_arquivo, index=False, header=False)
+    df_bd.to_excel(caminho_arquivo, index=False, header=False)
 
     try:
         token = st.secrets.get("GITHUB_TOKEN")
@@ -267,34 +273,36 @@ def salvar_banco_dados_github(mapa, nome_arquivo="banco_de_dados.xlsx"):
             g = Github(token)
             repo = g.get_repo(repo_name)
 
-            with open(nome_arquivo, "rb") as f:
+            with open(caminho_arquivo, "rb") as f:
                 novo_conteudo = f.read()
 
+            caminho_repo = caminho_arquivo.replace("\\", "/")
+
             try:
-                contents = repo.get_contents(nome_arquivo)
+                contents = repo.get_contents(caminho_repo)
                 repo.update_file(
                     contents.path,
-                    f"Atualizando BD: {nome_arquivo}",
+                    f"Atualizando BD: {caminho_repo}",
                     novo_conteudo,
                     contents.sha,
                 )
             except:
                 repo.create_file(
-                    nome_arquivo,
-                    f"Criando BD: {nome_arquivo}",
+                    caminho_repo,
+                    f"Criando BD: {caminho_repo}",
                     novo_conteudo,
                 )
-            st.success(f"Plano de Contas ({nome_arquivo}) salvo no GitHub com sucesso!")
+            st.success(f"Plano de Contas guardado no GitHub em `{caminho_repo}`!")
         else:
             st.warning("Salvo apenas localmente (sem token configurado).")
     except Exception as e:
-        st.error(f"Erro ao sincronizar com o GitHub ({nome_arquivo}): {e}")
+        st.error(f"Erro ao sincronizar com o GitHub ({caminho_arquivo}): {e}")
 
 
-def deletar_conta_do_banco(mapa, codigo_deletar, nome_arquivo="banco_de_dados.xlsx"):
+def deletar_conta_do_banco(mapa, codigo_deletar, caminho_arquivo):
     if codigo_deletar in mapa:
         del mapa[codigo_deletar]
-        salvar_banco_dados_github(mapa, nome_arquivo)
+        salvar_banco_dados_github(mapa, caminho_arquivo)
         return True
     return False
 
@@ -664,14 +672,14 @@ def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
 
 
 # ============================================================
-# PÁGINA STREAMLIT SIEG XML (ENTRADA 1 POR 1 AO APERTAR ENTER)
+# PÁGINA STREAMLIT SIEG XML
 # ============================================================
-def pagina_sieg_xml(mapa_contas=None, nome_arquivo_bd="banco_de_dados.xlsx", eh_dono=True):
+def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
     st.title("📄 SIEG XML PARA Importação")
     st.write("Faça o upload dos arquivos **XML**, **PDF** ou **ZIP**.")
 
-    if mapa_contas is None:
-        mapa_contas = carregar_banco_dados_github(nome_arquivo_bd)
+    if mapa_contas is None and caminho_arquivo_bd:
+        mapa_contas = carregar_banco_dados_github(caminho_arquivo_bd)
 
     uploaded_files = st.file_uploader(
         "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
@@ -826,7 +834,7 @@ def pagina_sieg_xml(mapa_contas=None, nome_arquivo_bd="banco_de_dados.xlsx", eh_
                                 existente["conta"] = c_inf
                             mapa_contas[cod] = existente
 
-                            salvar_banco_dados_github(mapa_contas, nome_arquivo_bd)
+                            salvar_banco_dados_github(mapa_contas, caminho_arquivo_bd)
                             st.session_state["codigos_ausentes"].remove(cod)
                             st.success(f"Conta para o código {cod} salva no plano!")
                             st.rerun()
