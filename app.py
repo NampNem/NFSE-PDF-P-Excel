@@ -42,12 +42,10 @@ def selecionar_plano_de_contas():
         salvar_empresas_github,
         obter_caminho_relativo_bd,
         eh_proprietario_do_banco,
-        deletar_conta_do_banco
     )
 
     user_id = st.session_state["usuario_logado"]
     
-    # Carrega empresas a partir da pasta planos_empresas/
     if "empresas_planos" not in st.session_state or not st.session_state["empresas_planos"]:
         st.session_state["empresas_planos"] = carregar_empresas_github()
 
@@ -97,43 +95,89 @@ def selecionar_plano_de_contas():
         if eh_dono:
             st.success(f"🔑 Plano Ativo: `{caminho_arquivo_ativo}` (Você é o **Dono** - Permissão total para editar e apagar).")
         else:
-            st.info(f"👁️ Plano Ativo: `{caminho_arquivo_ativo}` (**Apenas Leitura** - Pertence a outro utilizador).")
-
-        # EDITAR / APAGAR CONTAS (EXCLUSIVO PARA O DONO)
-        if eh_dono and mapa_contas:
-            with st.expander("📝 Editar ou Apagar Contas Cadastradas neste Plano"):
-                cod_sel_editar = st.selectbox("Selecione o Código do Serviço:", list(mapa_contas.keys()))
-                
-                if cod_sel_editar:
-                    dados_atuais = mapa_contas[cod_sel_editar]
-                    st.write(f"**Serviço:** {dados_atuais.get('descricao', 'Sem Descrição')}")
-                    
-                    c_alt, c_dom, c_btns = st.columns([2, 2, 2])
-                    with c_alt:
-                        nova_cnt_alt = st.text_input("Conta Alterdata:", value=str(dados_atuais.get("conta", "")), key=f"edit_alt_{cod_sel_editar}")
-                    with c_dom:
-                        nova_cnt_dom = st.text_input("Conta Domínio:", value=str(dados_atuais.get("conta_dominio", "")), key=f"edit_dom_{cod_sel_editar}")
-                    
-                    with c_btns:
-                        st.write("")
-                        st.write("")
-                        col_salv, col_del = st.columns(2)
-                        with col_salv:
-                            if st.button("💾 Salvar Alteração", key=f"btn_save_{cod_sel_editar}"):
-                                mapa_contas[cod_sel_editar]["conta"] = nova_cnt_alt.strip()
-                                mapa_contas[cod_sel_editar]["conta_dominio"] = nova_cnt_dom.strip()
-                                salvar_banco_dados_github(mapa_contas, caminho_arquivo_ativo)
-                                st.success("Conta atualizada!")
-                                st.rerun()
-                        with col_del:
-                            if st.button("❌ Apagar Código", key=f"btn_del_{cod_sel_editar}"):
-                                if deletar_conta_do_banco(mapa_contas, cod_sel_editar, caminho_arquivo_ativo):
-                                    st.success(f"Código {cod_sel_editar} apagado!")
-                                    st.rerun()
+            st.info(f"👁️ Plano Ativo: `{caminho_arquivo_ativo}` (**Apenas Leitura** - Pertence a outro usuário).")
 
         return mapa_contas, caminho_arquivo_ativo, eh_dono
 
     return None, None, False
+
+
+# ============================================================
+# TELA DEDICADA: ALTERAR PLANO DE CONTAS
+# ============================================================
+def pagina_alterar_plano_de_contas():
+    from sieg_xml import (
+        carregar_banco_dados_github,
+        salvar_banco_dados_github,
+        deletar_conta_do_banco,
+    )
+
+    st.title("📝 Alterar Plano de Contas")
+    
+    mapa_contas, caminho_arquivo_ativo, eh_dono = selecionar_plano_de_contas()
+    st.markdown("---")
+
+    if not mapa_contas and caminho_arquivo_ativo:
+        st.info("Este Plano de Contas está em branco no momento.")
+
+    elif mapa_contas and caminho_arquivo_ativo:
+        if eh_dono:
+            st.subheader("⚙️ Gerenciar / Alterar Contas Existentes")
+            cod_sel_editar = st.selectbox("Selecione o Código do Serviço para alterar:", list(mapa_contas.keys()))
+            
+            if cod_sel_editar:
+                dados_atuais = mapa_contas[cod_sel_editar]
+                st.write(f"**Serviço:** {dados_atuais.get('descricao', 'Sem Descrição')}")
+                
+                c_alt, c_dom, c_btns = st.columns([2, 2, 2])
+                with c_alt:
+                    nova_cnt_alt = st.text_input("Conta Alterdata:", value=str(dados_atuais.get("conta", "")), key=f"edit_alt_{cod_sel_editar}")
+                with c_dom:
+                    nova_cnt_dom = st.text_input("Conta Domínio:", value=str(dados_atuais.get("conta_dominio", "")), key=f"edit_dom_{cod_sel_editar}")
+                
+                with c_btns:
+                    st.write("")
+                    st.write("")
+                    col_salv, col_del = st.columns(2)
+                    with col_salv:
+                        if st.button("💾 Salvar Alteração", key=f"btn_save_{cod_sel_editar}", type="primary"):
+                            mapa_contas[cod_sel_editar]["conta"] = nova_cnt_alt.strip()
+                            mapa_contas[cod_sel_editar]["conta_dominio"] = nova_cnt_dom.strip()
+                            salvar_banco_dados_github(mapa_contas, caminho_arquivo_ativo)
+                            st.success("Conta atualizada no GitHub!")
+                            st.rerun()
+                    with col_del:
+                        if st.button("❌ Apagar Código", key=f"btn_del_{cod_sel_editar}"):
+                            if deletar_conta_do_banco(mapa_contas, cod_sel_editar, caminho_arquivo_ativo):
+                                st.success(f"Código {cod_sel_editar} apagado com sucesso!")
+                                st.rerun()
+
+            st.markdown("---")
+            st.subheader("📊 Tabela Completa das Contas Cadastradas")
+            
+            linhas_tbl = []
+            for cod_item, d_item in mapa_contas.items():
+                linhas_tbl.append({
+                    "Código Serviço": cod_item,
+                    "Descrição": d_item.get("descricao", ""),
+                    "Conta Alterdata": d_item.get("conta", ""),
+                    "Conta Domínio": d_item.get("conta_dominio", "")
+                })
+            st.dataframe(pd.DataFrame(linhas_tbl), use_container_width=True)
+
+        else:
+            st.error("⚠️ Você não tem permissão para alterar este Plano de Contas. Apenas o criador (dono) do plano pode fazer alterações.")
+            
+            st.subheader("📊 Visualização das Contas (Modo Leitura)")
+            linhas_tbl = []
+            for cod_item, d_item in mapa_contas.items():
+                linhas_tbl.append({
+                    "Código Serviço": cod_item,
+                    "Descrição": d_item.get("descricao", ""),
+                    "Conta Alterdata": d_item.get("conta", ""),
+                    "Conta Domínio": d_item.get("conta_dominio", "")
+                })
+            st.dataframe(pd.DataFrame(linhas_tbl), use_container_width=True)
 
 
 # ============================================================
@@ -146,7 +190,7 @@ def menu_principal():
         st.rerun()
 
     st.title("🗂️ Meus Sistemas")
-    st.write("Escolha o sistema que deseja usar:")
+    st.write("Escolha a opção que deseja acessar:")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -158,9 +202,8 @@ def menu_principal():
             st.session_state["pagina"] = "excel_nfse"
             st.rerun()
     with col3:
-        if st.button("🏢 Empresas", use_container_width=True):
-            st.session_state["pagina"] = "empresas"
-            st.session_state["empresa_pagina"] = "lista"
+        if st.button("📝 Alterar Plano de Contas", use_container_width=True):
+            st.session_state["pagina"] = "alterar_plano"
             st.rerun()
 
 
@@ -176,7 +219,7 @@ if pagina_atual != "menu":
         st.rerun()
 
 # ------------------------------------------------------------
-# SIEG XML
+# OPÇÃO 1: SIEG XML
 # ------------------------------------------------------------
 if pagina_atual == "sieg":
     from sieg_xml import pagina_sieg_xml
@@ -186,7 +229,7 @@ if pagina_atual == "sieg":
         pagina_sieg_xml(mapa_contas, caminho_arquivo_bd, eh_dono)
 
 # ------------------------------------------------------------
-# EXCEL NFSE
+# OPÇÃO 2: EXCEL NFSE
 # ------------------------------------------------------------
 elif pagina_atual == "excel_nfse":
     from sieg_xml import (
@@ -250,7 +293,7 @@ elif pagina_atual == "excel_nfse":
 
             if ausentes:
                 if eh_dono:
-                    st.warning(f"⚠️️ Existem códigos de serviço sem conta {nome_modo} cadastrada neste Plano de Contas!")
+                    st.warning(f"⚠️ Existem códigos de serviço sem conta {nome_modo} cadastrada neste Plano de Contas!")
                     st.write("Configure abaixo **um a um**. Pressione **Enter** em cada caixa para salvar individualmente:")
                     conta_padrao = CONTAS[modo]["debito_padrao"]
 
@@ -286,7 +329,7 @@ elif pagina_atual == "excel_nfse":
                         st.divider()
 
                 else:
-                    st.error(f"⚠️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
+                    st.error(f"⚠️️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
 
             else:
                 st.subheader(f"🧾 Contas dos Impostos Retidos - {nome_modo}")
@@ -337,9 +380,11 @@ elif pagina_atual == "excel_nfse":
                 else:
                     st.download_button("📊 Baixar Planilha Alterdata (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_alterdata_excel.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-elif pagina_atual == "empresas":
-    from empresas import pagina_empresas
-    pagina_empresas()
+# ------------------------------------------------------------
+# OPÇÃO 3: ALTERAR PLANO DE CONTAS
+# ------------------------------------------------------------
+elif pagina_atual == "alterar_plano":
+    pagina_alterar_plano_de_contas()
 
 else:
     menu_principal()
