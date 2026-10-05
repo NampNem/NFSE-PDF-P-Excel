@@ -527,12 +527,10 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
             conta_deb = conta_debito_do_banco(mapa_contas, cod_trib, modo)
             conta_cred = contas["credito_principal"]
 
-        # HISTÓRICO EM DUAS LINHAS:
-        # Linha 1: 00000 - serviço tal (NF - XXX)
-        # Linha 2: nome da empresa prestadora
-        desc_linha1 = f"{cod_trib} - {descr_servico} (NF {num_nota})".strip()
-        desc_linha2 = f"{nome_empresa}".strip()
-        desc_padrao = f"{desc_linha1}\n{desc_linha2}"
+        # MONTAGEM EM DUAS LINHAS COM QUEBRA DE LINHA EXPLICITA (\n)
+        linha_1 = f"{cod_trib} - {descr_servico} (NF {num_nota})".strip()
+        linha_2 = f"{nome_empresa}".strip()
+        desc_padrao = f"{linha_1}\n{linha_2}"
 
         val_bruto = converter_valor(row.get("Valor do Serviço")) or 0.0
         val_liquido = converter_valor(row.get("Valor Líquido")) or 0.0
@@ -568,16 +566,12 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
             })
 
             soma_pcc = 0.0
-            pcc_retidos = []
             if str(row.get("PIS Retido?", "")).strip().upper() == "COM RETENÇÃO":
                 soma_pcc += val_pis
-                pcc_retidos.append("PIS")
             if str(row.get("COFINS Retido?", "")).strip().upper() == "COM RETENÇÃO":
                 soma_pcc += val_cofins
-                pcc_retidos.append("COFINS")
             if str(row.get("CSLL Retida?", "")).strip().upper() == "COM RETENÇÃO":
                 soma_pcc += val_csll
-                pcc_retidos.append("CSLL")
 
             if soma_pcc > 0:
                 desc_pcc = f"Retenção PCC s/ NF {num_nota}\n{nome_empresa}"
@@ -659,7 +653,6 @@ def gerar_txt_dominio(df_dominio, lote_inicial=1):
         valor = converter_valor(r.get("valor")) or 0.0
         valor_txt = f"{valor:.2f}".replace(".", ",")
 
-        # Mantém a quebra de linha tratada para o arquivo de texto
         hist = limpo(r.get("descrição")).replace(";", " ")
 
         if deb:
