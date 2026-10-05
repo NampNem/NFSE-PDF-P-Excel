@@ -3,18 +3,15 @@ import io
 import pandas as pd
 import streamlit as st
 
+# Importa o dicionário de usuários individuais do arquivo usuarios.py
+from usuarios import USUARIOS_PERMITIDOS
+
 st.set_page_config(page_title="Meus Sistemas", page_icon="🗂️", layout="wide")
 
-# ============================================================
-# USUÁRIOS PERMITIDOS (CÓDIGO DE 3 DÍGITOS)
-# ============================================================
-USUARIOS_PERMITIDOS = {
-    "101": "Paulo Mota",
-    "102": "Assistente 2",
-    "103": "Assistente 3",
-}
 
-
+# ============================================================
+# TELA DE LOGIN
+# ============================================================
 def tela_login():
     st.markdown("<h1 style='text-align: center;'>🔒 Acesso ao Sistema</h1>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -110,6 +107,9 @@ def selecionar_plano_de_contas():
     return None, None, False
 
 
+# ============================================================
+# MENU PRINCIPAL
+# ============================================================
 def menu_principal():
     st.sidebar.markdown(f"👤 Logado como: **{st.session_state['usuario_nome']}** (`{st.session_state['usuario_logado']}`)")
     if st.sidebar.button("🚪 Sair / Logoff"):
@@ -135,6 +135,9 @@ def menu_principal():
             st.rerun()
 
 
+# ============================================================
+# NAVEGAÇÃO ENTRE OS SISTEMAS
+# ============================================================
 pagina_atual = st.session_state.get("pagina", "menu")
 
 if pagina_atual != "menu":
