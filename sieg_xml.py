@@ -17,8 +17,9 @@ ARQUIVO_EMPRESAS_JSON = os.path.join(PASTA_BANCOS, "empresas.json")
 
 CONTAS = {
     "alterdata": {
-        "debito_padrao": "2135",
-        "credito_principal": "708",
+        "debito_padrao": "2135",        # Despesa
+        "credito_principal": "708",     # Fornecedores (Despesa) ou Clientes (Receita)
+        "credito_receita": "3001",      # Receita de Serviços
         "pcc": "236",
         "irrf": "763",
         "inss": "834",
@@ -26,8 +27,9 @@ CONTAS = {
         "historico": "99",
     },
     "dominio": {
-        "debito_padrao": "325",
-        "credito_principal": "3907",
+        "debito_padrao": "325",         # Despesa
+        "credito_principal": "3907",    # Fornecedores (Despesa) ou Clientes (Receita)
+        "credito_receita": "5001",      # Receita de Serviços
         "pcc": "647",
         "irrf": "178",
         "inss": "184",
@@ -140,14 +142,22 @@ def conta_debito_do_banco(mapa, cod, modo):
     return valor or CONTAS[modo]["debito_padrao"]
 
 
-def codigo_precisa_cadastro(mapa, cod, modo):
+def conta_credito_receita_do_banco(mapa, cod, modo):
+    chave = "conta_dominio_rec" if modo == "dominio" else "conta_rec"
+    valor = str(mapa.get(cod, {}).get(chave, "") or "").strip()
+    return valor or CONTAS[modo]["credito_receita"]
+
+
+def codigo_precisa_cadastro(mapa, cod, modo, eh_receita=False):
     dados = mapa.get(cod)
     if dados is None:
         return True
-    if modo == "dominio":
-        return not str(dados.get("conta_dominio", "") or "").strip()
+    if eh_receita:
+        chave = "conta_dominio_rec" if modo == "dominio" else "conta_rec"
+        return not str(dados.get(chave, "") or "").strip()
     else:
-        return not str(dados.get("conta", "") or "").strip()
+        chave = "conta_dominio" if modo == "dominio" else "conta"
+        return not str(dados.get(chave, "") or "").strip()
 
 
 def validar_retencoes(v_serv, v_liq, impostos, tol=0.02):
@@ -175,47 +185,18 @@ def validar_retencoes(v_serv, v_liq, impostos, tol=0.02):
 
 
 # ============================================================
-# CONFERÊNCIA EXCLUSIVA DO CNPJ DO PRESTADOR
-# ============================================================
-def verificar_e_exibir_conferencia_cnpj(df_nfse, cnpj_empresa_esperado):
-    if not cnpj_empresa_esperado or df_nfse.empty or "CNPJ Prestador" not in df_nfse.columns:
-        return
-
-    cnpj_limpo_esperado = limpar_cnpj(cnpj_empresa_esperado)
-    cnpjs_prestadores = set(df_nfse["CNPJ Prestador"].dropna().apply(limpar_cnpj).unique())
-    cnpjs_prestadores.discard("")
-
-    if not cnpjs_prestadores:
-        return
-
-    if len(cnpjs_prestadores) == 1 and cnpj_limpo_esperado in cnpjs_prestadores:
-        st.success(f"✅ **CNPJ do Prestador Confere!** O CNPJ do prestador das notas ({cnpj_empresa_esperado}) é idêntico ao cadastrado na empresa.")
-    else:
-        cnpjs_encontrados_str = ", ".join(list(cnpjs_prestadores))
-        st.warning(
-            f"⚠️ **Alerta de Divergência de CNPJ!**\n\n"
-            f"- **CNPJ da Empresa Selecionada:** `{cnpj_empresa_esperado}`\n"
-            f"- **CNPJ do Prestador Encontrado nas Notas:** `{cnpjs_encontrados_str}`\n\n"
-            f"Verifique se selecionou a empresa correta antes de exportar!"
-        )
-
-
-# ============================================================
 # GERENCIAMENTO DE PASTAS E REPOSITÓRIO GITHUB
 # ============================================================
 def garantir_pasta_local():
-    """Cria a pasta local se não existir."""
     if not os.path.exists(PASTA_BANCOS):
         os.makedirs(PASTA_BANCOS, exist_ok=True)
 
 
 def obter_caminho_relativo_bd(empresa_id):
-    """Devolve o caminho do arquivo na pasta planos_empresas."""
     return os.path.join(PASTA_BANCOS, f"plano_empresa_{empresa_id}.xlsx")
 
 
 def carregar_empresas_github():
-    """Carrega a lista central de empresas da pasta planos_empresas."""
     garantir_pasta_local()
     if os.path.exists(ARQUIVO_EMPRESAS_JSON):
         try:
@@ -227,7 +208,6 @@ def carregar_empresas_github():
 
 
 def salvar_empresas_github(empresas_dict):
-    """Salva a lista de empresas na pasta planos_empresas no GitHub."""
     garantir_pasta_local()
     with open(ARQUIVO_EMPRESAS_JSON, "w", encoding="utf-8") as f:
         json.dump(empresas_dict, f, ensure_ascii=False, indent=4)
@@ -250,7 +230,6 @@ def salvar_empresas_github(empresas_dict):
 
 
 def deletar_empresa_completa_github(cod_empresa, empresas_dict):
-    """Apaga permanentemente o plano .xlsx e a empresa do JSON no GitHub."""
     caminho_local = obter_caminho_relativo_bd(cod_empresa)
     caminho_repo = caminho_local.replace("\\", "/")
 
@@ -302,11 +281,707 @@ def carregar_banco_dados_github(caminho_arquivo):
                 descricao = extrair_descricao_do_banco(r.iloc[0])
                 conta = limpar_conta(r.iloc[1]) if len(r) > 1 else ""
                 conta_dom = limpar_conta(r.iloc[2]) if len(r) > 2 else ""
+                conta_rec = limpar_conta(r.iloc[3]) if len(r) > 3 else ""
+                conta_dom_rec = limpar_conta(r.iloc[4]) if len(r) > 4 else ""
                 if cod:
                     mapa[cod] = {
                         "descricao": descricao,
-                        "conta": conta,
-                        "conta_dominio": conta_dom,
+                        "conta": conta,                  # Despesa Alterdata
+                        "conta_dominio": conta_dom,      # Despesa Domínio
+                        "conta_rec": conta_rec,          # Receita Alterdata
+                        "conta_dominio_rec": conta_dom_rec # Receita Domínio
                     }
         except Exception as e:
-            st.error(f"Erro ao carregar o Plano de Contas ({caminho_arquivo}):
+            st.error(f"Erro ao carregar o Plano de Contas ({caminho_arquivo}): {e}")
+    return mapa
+
+
+def salvar_banco_dados_github(mapa, caminho_arquivo):
+    garantir_pasta_local()
+    linhas = [
+        (
+            montar_celula_banco(cod, dados.get("descricao", "")),
+            dados.get("conta", ""),
+            dados.get("conta_dominio", ""),
+            dados.get("conta_rec", ""),
+            dados.get("conta_dominio_rec", ""),
+        )
+        for cod, dados in mapa.items()
+    ]
+    df_bd = pd.DataFrame(linhas)
+    df_bd.to_excel(caminho_arquivo, index=False, header=False)
+
+    try:
+        token = st.secrets.get("GITHUB_TOKEN")
+        repo_name = st.secrets.get("REPO_NAME")
+
+        if token and repo_name:
+            g = Github(token)
+            repo = g.get_repo(repo_name)
+
+            with open(caminho_arquivo, "rb") as f:
+                novo_conteudo = f.read()
+
+            caminho_repo = caminho_arquivo.replace("\\", "/")
+
+            try:
+                contents = repo.get_contents(caminho_repo)
+                repo.update_file(
+                    contents.path,
+                    f"Atualizando BD: {caminho_repo}",
+                    novo_conteudo,
+                    contents.sha,
+                )
+            except:
+                repo.create_file(
+                    caminho_repo,
+                    f"Criando BD: {caminho_repo}",
+                    novo_conteudo,
+                )
+            st.success(f"Plano de Contas salvo no GitHub em `{caminho_repo}`!")
+        else:
+            st.warning("Salvo apenas localmente (sem token configurado).")
+    except Exception as e:
+        st.error(f"Erro ao sincronizar com o GitHub ({caminho_arquivo}): {e}")
+
+
+def deletar_conta_do_banco(mapa, codigo_deletar, caminho_arquivo):
+    if codigo_deletar in mapa:
+        del mapa[codigo_deletar]
+        salvar_banco_dados_github(mapa, caminho_arquivo)
+        return True
+    return False
+
+
+# ============================================================
+# PARSER DE XML E GERADOR DE RELATÓRIOS
+# ============================================================
+def extrair_xml(caminho_ou_conteudo):
+    if isinstance(caminho_ou_conteudo, bytes):
+        root = ET.fromstring(caminho_ou_conteudo)
+    elif isinstance(caminho_ou_conteudo, str) and caminho_ou_conteudo.endswith(".xml"):
+        tree = ET.parse(caminho_ou_conteudo)
+        root = tree.getroot()
+    else:
+        root = ET.fromstring(caminho_ou_conteudo)
+
+    def find_tag(element, tag_name):
+        if element is None:
+            return None
+        for child in element.iter():
+            if child.tag.endswith(tag_name):
+                return child
+        return None
+
+    def get_text(element, tag_name, default=""):
+        node = find_tag(element, tag_name)
+        return node.text.strip() if (node is not None and node.text) else default
+
+    def get_float(element, tag_name, default=0.0):
+        val = get_text(element, tag_name)
+        try:
+            return float(val) if val else default
+        except ValueError:
+            return default
+
+    if root.tag.endswith("evento") or find_tag(root, "pedRegEvento") is not None:
+        return {
+            "tipo_xml": "EVENTO",
+            "Chave NFS-e Original": get_text(root, "chNFSe"),
+            "Chave NFS-e Substituta": get_text(root, "chSubstituta"),
+            "Descrição Evento": get_text(root, "xDesc"),
+            "Motivo Cancelamento": get_text(root, "xMotivo"),
+            "Data Evento": get_text(root, "dhEvento"),
+            "CNPJ Autor": get_text(root, "CNPJAutor") or get_text(root, "CNPJ"),
+        }
+
+    inf_nfse_node = find_tag(root, "infNFSe")
+    chave_nfse = inf_nfse_node.attrib.get("Id", "") if inf_nfse_node is not None else ""
+    if chave_nfse.startswith("NFS"):
+        chave_nfse = chave_nfse[3:]
+
+    numero_nfse = get_text(root, "nNFSe") or get_text(root, "Numero")
+    data_competencia = get_text(root, "dCompet") or get_text(root, "DataEmissao")
+
+    emit_node = find_tag(root, "emit") or find_tag(root, "PrestadorServico") or find_tag(root, "Prestador")
+    
+    nome_empresa = (
+        get_text(emit_node, "xNome") 
+        or get_text(emit_node, "RazaoSocial") 
+        or get_text(root, "xNome")
+    )
+    
+    cnpj_prestador = (
+        get_text(emit_node, "CNPJ") 
+        or get_text(emit_node, "Cnpj") 
+        or get_text(root, "CNPJ") 
+        or get_text(root, "Cnpj")
+    )
+
+    codigo_tributacao = get_text(root, "cTribNac") or get_text(root, "CodigoListaServico") or get_text(root, "ItemListaServico")
+    tipo_servico = (
+        get_text(root, "xTribNac")
+        or get_text(root, "xTribMun")
+        or get_text(root, "xDescServ")
+        or get_text(root, "Discriminação")
+        or get_text(root, "Discriminacao")
+    )
+
+    v_serv = get_float(root, "vServ") or get_float(root, "ValorServicos")
+    v_liq = get_float(root, "vLiq") or get_float(root, "ValorLiquidoNfse")
+    if v_liq == 0.0 and v_serv > 0.0:
+        v_liq = v_serv
+
+    def get_float_multi(element, nomes):
+        for nome in nomes:
+            valor = get_float(element, nome)
+            if valor > 0:
+                return valor
+        return 0.0
+
+    v_pis = get_float_multi(root, ["vPis", "ValorPis"])
+    v_cofins = get_float_multi(root, ["vCofins", "ValorCofins"])
+    v_csll = get_float_multi(root, ["vRetCSLL", "vCSLL", "ValorCsll"])
+    v_irrf = get_float_multi(root, ["vRetIRRF", "vIRRF", "ValorIr"])
+    v_inss = get_float_multi(root, ["vRetCP", "vINSS", "ValorInss"])
+    v_iss = get_float_multi(root, ["vISSQN", "ValorIss"])
+
+    v_desc = get_float(root, "vDescIncond") + get_float(root, "vDescCond") + get_float(root, "DescontoIncondicionado")
+    v_base = round(v_serv - v_desc, 2)
+
+    impostos = {
+        "IRRF": v_irrf,
+        "PIS": v_pis,
+        "COFINS": v_cofins,
+        "CSLL": v_csll,
+        "INSS": v_inss,
+        "ISS": v_iss,
+    }
+    retidos, status_validacao, qtd_comb = validar_retencoes(v_base, v_liq, impostos)
+
+    def val_ret(nome):
+        return impostos[nome] if retidos[nome] else 0.0
+
+    def flag(nome):
+        return "Com Retenção" if retidos[nome] else "Sem Retenção"
+
+    lista_ret = [n for n in impostos if retidos[n]]
+    texto_retencoes = (
+        "Retenção " + "/".join(lista_ret) if lista_ret else "Sem Retenção"
+    )
+    diferenca = round(v_base - v_liq, 2)
+
+    return {
+        "tipo_xml": "NFSE",
+        "Chave NFS-e": chave_nfse,
+        "Número da NFS-e": numero_nfse,
+        "Data Competência": data_competencia,
+        "CNPJ Prestador": cnpj_prestador,
+        "Nome da Empresa": nome_empresa,
+        "Código Tributação": codigo_tributacao,
+        "Tipo de Serviço": tipo_servico,
+        "Valor do Serviço": v_serv,
+        "Valor PIS": val_ret("PIS"),
+        "PIS Retido?": flag("PIS"),
+        "Valor COFINS": val_ret("COFINS"),
+        "COFINS Retido?": flag("COFINS"),
+        "CSLL (Retida)": val_ret("CSLL"),
+        "CSLL Retida?": flag("CSLL"),
+        "IRRF": val_ret("IRRF"),
+        "IRRF Retido?": flag("IRRF"),
+        "INSS (Previdenciária)": val_ret("INSS"),
+        "INSS Retido?": flag("INSS"),
+        "ISS": v_iss,
+        "ISS Retenção": val_ret("ISS"),
+        "ISS Retido?": flag("ISS"),
+        "Valor Líquido": v_liq,
+        "Diferença Bruto-Líquido": formatar_valor(diferenca),
+        "Retenções Identificadas": texto_retencoes,
+        "Valor Total Retenções": formatar_valor(diferenca),
+        "Status Validação": status_validacao,
+        "Combinações Encontradas": qtd_comb,
+    }
+
+
+def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, eh_receita=False):
+    contas = contas or CONTAS[modo]
+    historico = str(contas.get("historico", "99")).strip() or "99"
+    if historico.isdigit():
+        historico = int(historico)
+    linhas_alterdata = []
+
+    for _, row in df_extrato.iterrows():
+        num_nota = str(row.get("Número da NFS-e", "") or "").strip()
+        data_comp = converter_data_obj(row.get("Data Competência", ""))
+        nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
+        cod_trib = str(row.get("Código Tributação", "") or "").strip()
+
+        if eh_receita:
+            # RECEITA: Débito = Clientes (credito_principal) e Crédito = Receita de Serviços (código serviço)
+            conta_deb = contas["credito_principal"]
+            conta_cred = conta_credito_receita_do_banco(mapa_contas, cod_trib, modo)
+        else:
+            # DESPESA: Débito = Despesa (código serviço) e Crédito = Fornecedores (credito_principal)
+            conta_deb = conta_debito_do_banco(mapa_contas, cod_trib, modo)
+            conta_cred = contas["credito_principal"]
+
+        desc_padrao = f"NF - {num_nota} {nome_empresa}".strip()
+
+        val_bruto = converter_valor(row.get("Valor do Serviço")) or 0.0
+        val_liquido = converter_valor(row.get("Valor Líquido")) or 0.0
+
+        val_pis = converter_valor(row.get("Valor PIS")) or 0.0
+        val_cofins = converter_valor(row.get("Valor COFINS")) or 0.0
+        val_csll = converter_valor(row.get("CSLL (Retida)")) or 0.0
+        val_irrf = converter_valor(row.get("IRRF")) or 0.0
+        val_inss = converter_valor(row.get("INSS (Previdenciária)")) or 0.0
+        val_iss = converter_valor(row.get("ISS Retenção")) or 0.0
+
+        soma_retencoes = val_pis + val_cofins + val_csll + val_irrf + val_inss + val_iss
+
+        if soma_retencoes == 0.0:
+            linhas_alterdata.append({
+                "Data": data_comp,
+                "debito": conta_deb,
+                "credito": conta_cred,
+                "valor": val_bruto,
+                "documento": num_nota,
+                "historico": historico,
+                "descrição": desc_padrao,
+            })
+        else:
+            linhas_alterdata.append({
+                "Data": data_comp,
+                "debito": conta_deb,
+                "credito": "",
+                "valor": val_bruto,
+                "documento": num_nota,
+                "historico": historico,
+                "descrição": desc_padrao,
+            })
+
+            soma_pcc = 0.0
+            pcc_retidos = []
+            if str(row.get("PIS Retido?", "")).strip().upper() == "COM RETENÇÃO":
+                soma_pcc += val_pis
+                pcc_retidos.append("PIS")
+            if str(row.get("COFINS Retido?", "")).strip().upper() == "COM RETENÇÃO":
+                soma_pcc += val_cofins
+                pcc_retidos.append("COFINS")
+            if str(row.get("CSLL Retida?", "")).strip().upper() == "COM RETENÇÃO":
+                soma_pcc += val_csll
+                pcc_retidos.append("CSLL")
+
+            if soma_pcc > 0:
+                desc_pcc = f"Retenção PCC s/ NF - {num_nota} {nome_empresa}"
+                linhas_alterdata.append({
+                    "Data": data_comp,
+                    "debito": "",
+                    "credito": contas["pcc"],
+                    "valor": soma_pcc,
+                    "documento": num_nota,
+                    "historico": historico,
+                    "descrição": desc_pcc,
+                })
+
+            if str(row.get("IRRF Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_irrf > 0:
+                desc_irrf = f"Retenção IRRF s/ NF - {num_nota} {nome_empresa}"
+                linhas_alterdata.append({
+                    "Data": data_comp,
+                    "debito": "",
+                    "credito": contas["irrf"],
+                    "valor": val_irrf,
+                    "documento": num_nota,
+                    "historico": historico,
+                    "descrição": desc_irrf,
+                })
+
+            if str(row.get("INSS Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_inss > 0:
+                desc_inss = f"Retenção INSS s/ NF - {num_nota} {nome_empresa}"
+                linhas_alterdata.append({
+                    "Data": data_comp,
+                    "debito": "",
+                    "credito": contas["inss"],
+                    "valor": val_inss,
+                    "documento": num_nota,
+                    "historico": historico,
+                    "descrição": desc_inss,
+                })
+
+            if str(row.get("ISS Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_iss > 0:
+                desc_iss = f"Retenção ISS s/ NF - {num_nota} {nome_empresa}"
+                linhas_alterdata.append({
+                    "Data": data_comp,
+                    "debito": "",
+                    "credito": contas["iss"],
+                    "valor": val_iss,
+                    "documento": num_nota,
+                    "historico": historico,
+                    "descrição": desc_iss,
+                })
+
+            linhas_alterdata.append({
+                "Data": data_comp,
+                "debito": "",
+                "credito": conta_cred,
+                "valor": val_liquido,
+                "documento": num_nota,
+                "historico": historico,
+                "descrição": desc_padrao,
+            })
+
+    return pd.DataFrame(linhas_alterdata)
+
+
+def gerar_txt_dominio(df_dominio, lote_inicial=1):
+    def limpo(v):
+        if v is None or (not isinstance(v, str) and pd.isna(v)):
+            return ""
+        return str(v).strip()
+
+    linhas = []
+    lote = int(lote_inicial) - 1
+
+    for _, r in df_dominio.iterrows():
+        deb = limpo(r.get("debito"))
+        cred = limpo(r.get("credito"))
+
+        data = r.get("Data")
+        data_txt = data.strftime("%d/%m/%Y") if hasattr(data, "strftime") else ""
+
+        valor = converter_valor(r.get("valor")) or 0.0
+        valor_txt = f"{valor:.2f}".replace(".", ",")
+
+        hist = limpo(r.get("descrição")).replace(";", " ")
+
+        if deb:
+            lote += 1
+            lote_txt = str(lote)
+        else:
+            lote_txt = ""
+
+        linhas.append(f"{data_txt};{deb};{cred};{valor_txt};{hist};{lote_txt};;;")
+
+    conteudo = "\r\n".join(linhas) + "\r\n"
+    return conteudo.encode("cp1252", errors="replace")
+
+
+def gerar_aba_substituidas(eventos_list, df_nfse):
+    if not eventos_list:
+        return pd.DataFrame()
+
+    linhas_subst = []
+    mapa_nfse = {}
+
+    if df_nfse is not None and not df_nfse.empty:
+        for _, row in df_nfse.iterrows():
+            chave = str(row.get("Chave NFS-e", "")).strip()
+            if chave:
+                mapa_nfse[chave] = row
+
+    for ev in eventos_list:
+        ch_orig = ev.get("Chave NFS-e Original", "")
+        ch_sub = ev.get("Chave NFS-e Substituta", "")
+
+        nf_orig = mapa_nfse.get(ch_orig, {})
+        nf_sub = mapa_nfse.get(ch_sub, {})
+
+        fornecedor_nome = (
+            nf_orig.get("Nome da Empresa")
+            or nf_sub.get("Nome da Empresa")
+            or "Não encontrado no lote"
+        )
+        fornecedor_cnpj = (
+            nf_orig.get("CNPJ Prestador")
+            or nf_sub.get("CNPJ Prestador")
+            or ev.get("CNPJ Autor", "N/A")
+        )
+
+        linhas_subst.append({
+            "Fornecedor / Prestador": fornecedor_nome,
+            "CNPJ Fornecedor": fornecedor_cnpj,
+            "Chave Nota Cancelada": ch_orig,
+            "Nº Nota Cancelada": nf_orig.get("Número da NFS-e", "Não importada no lote"),
+            "Valor Nota Cancelada": nf_orig.get("Valor do Serviço", "N/A"),
+            "Chave Nota Substituta (Nova)": ch_sub,
+            "Nº Nota Substituta (Nova)": nf_sub.get("Número da NFS-e", "Não importada no lote"),
+            "Valor Nota Substituta": nf_sub.get("Valor do Serviço", "N/A"),
+            "Motivo Cancelamento": ev.get("Motivo Cancelamento", "Não informado"),
+            "Descrição do Evento": ev.get("Descrição Evento", ""),
+            "Data do Evento": ev.get("Data Evento", ""),
+        })
+
+    return pd.DataFrame(linhas_subst)
+
+
+def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
+    if not pdfs_mapeados or df_nfse.empty:
+        return None
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_out:
+        for _, row in df_nfse.iterrows():
+            chave = str(row.get("Chave NFS-e", "")).strip()
+            num_nota = str(row.get("Número da NFS-e", "")).strip()
+            fornecedor = limpar_nome_arquivo(row.get("Nome da Empresa", "FORNECEDOR"))
+            pasta_mes = extrair_pasta_mes_ano(row.get("Data Competência"))
+
+            caminho_pdf_original = pdfs_mapeados.get(chave) or pdfs_mapeados.get(num_nota)
+
+            if caminho_pdf_original and os.path.exists(caminho_pdf_original):
+                nome_pdf = f"{fornecedor} - NF {num_nota}.pdf"
+                caminho_no_zip = os.path.join(pasta_mes, nome_pdf)
+                zip_out.write(caminho_pdf_original, arcname=caminho_no_zip)
+
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue() if zip_buffer.getbuffer().nbytes > 0 else None
+
+
+# ============================================================
+# PÁGINA STREAMLIT SIEG XML
+# ============================================================
+def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
+    st.title("📄 SIEG XML PARA Importação")
+    st.write("Faça o upload dos arquivos **XML**, **PDF** ou **ZIP**.")
+
+    if mapa_contas is None and caminho_arquivo_bd:
+        mapa_contas = carregar_banco_dados_github(caminho_arquivo_bd)
+
+    uploaded_files = st.file_uploader(
+        "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
+        type=["xml", "pdf", "zip"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files:
+        col_btn1, col_btn2, _ = st.columns([1, 1, 2])
+        with col_btn1:
+            processar_alterdata = st.button("🚀 Processar para Alterdata")
+        with col_btn2:
+            processar_dominio = st.button("🚀 Processar para Domínio")
+
+        if processar_alterdata or processar_dominio:
+            modo_escolhido = "dominio" if processar_dominio else "alterdata"
+            st.session_state["modo"] = modo_escolhido
+
+            temp_dir = tempfile.mkdtemp()
+            xmls_para_processar = []
+            pdfs_encontrados = {}
+
+            for uploaded_file in uploaded_files:
+                nome_arquivo = uploaded_file.name
+                extensao = os.path.splitext(nome_arquivo)[1].lower()
+
+                if extensao == ".xml":
+                    caminho_xml = os.path.join(temp_dir, nome_arquivo)
+                    with open(caminho_xml, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    xmls_para_processar.append(caminho_xml)
+
+                elif extensao == ".pdf":
+                    caminho_pdf = os.path.join(temp_dir, nome_arquivo)
+                    with open(caminho_pdf, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    nome_sem_ext = os.path.splitext(nome_arquivo)[0]
+                    pdfs_encontrados[nome_sem_ext] = caminho_pdf
+
+                elif extensao == ".zip":
+                    caminho_zip = os.path.join(temp_dir, nome_arquivo)
+                    with open(caminho_zip, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+
+                    pasta_zip = os.path.join(temp_dir, os.path.splitext(nome_arquivo)[0])
+                    os.makedirs(pasta_zip, exist_ok=True)
+
+                    try:
+                        with zipfile.ZipFile(caminho_zip, "r") as zip_ref:
+                            zip_ref.extractall(pasta_zip)
+
+                        for raiz, _, arquivos in os.walk(pasta_zip):
+                            for arq in arquivos:
+                                ext = os.path.splitext(arq)[1].lower()
+                                caminho_completo = os.path.join(raiz, arq)
+                                if ext == ".xml":
+                                    xmls_para_processar.append(caminho_completo)
+                                elif ext == ".pdf":
+                                    nome_sem_ext = os.path.splitext(arq)[0]
+                                    pdfs_encontrados[nome_sem_ext] = caminho_completo
+                    except Exception as e:
+                        st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
+
+            if xmls_para_processar:
+                registros_nfse = []
+                registros_eventos = []
+                erros_processamento = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                for i, caminho_xml in enumerate(xmls_para_processar):
+                    nome_xml = os.path.basename(caminho_xml)
+                    status_text.text(f"Processando [{i+1}/{len(xmls_para_processar)}]: {nome_xml}")
+                    try:
+                        dados = extrair_xml(caminho_xml)
+                        if dados.get("tipo_xml") == "EVENTO":
+                            registros_eventos.append(dados)
+                        else:
+                            registros_nfse.append(dados)
+                    except Exception as err:
+                        erros_processamento.append(f"{nome_xml}: {str(err)}")
+                    progress_bar.progress((i + 1) / len(xmls_para_processar))
+
+                status_text.text("Extração concluída!")
+
+                df_nfse = pd.DataFrame(registros_nfse)
+                st.session_state["df_extrato"] = df_nfse
+                st.session_state["eventos_list"] = registros_eventos
+                st.session_state["zip_pdf_bytes"] = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
+
+                # DETERMINA SE É RECEITA OU DESPESA COM BASE NO CNPJ
+                cnpj_emp_sel = limpar_cnpj(st.session_state.get("empresa_ativa_cnpj", ""))
+                cnpjs_prest_lote = set(df_nfse["CNPJ Prestador"].dropna().apply(limpar_cnpj).unique()) if not df_nfse.empty else set()
+                eh_receita = bool(cnpj_emp_sel and cnpj_emp_sel in cnpjs_prest_lote)
+                st.session_state["eh_receita_lote"] = eh_receita
+
+                mapa_tipo_servico_xml = {}
+                if not df_nfse.empty:
+                    for _, row in df_nfse.iterrows():
+                        cod = str(row.get("Código Tributação", "") or "").strip()
+                        tipo = str(row.get("Tipo de Serviço", "") or "").strip()
+                        if cod and tipo and cod not in mapa_tipo_servico_xml:
+                            mapa_tipo_servico_xml[cod] = tipo
+                st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
+
+                if not df_nfse.empty:
+                    codigos_na_nf = set(df_nfse["Código Tributação"].dropna().unique())
+                    ausentes = [
+                        c for c in codigos_na_nf
+                        if c and codigo_precisa_cadastro(mapa_contas, c, modo_escolhido, eh_receita=eh_receita)
+                    ]
+                else:
+                    ausentes = []
+
+                st.session_state["codigos_ausentes"] = ausentes
+
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if "df_extrato" in st.session_state and st.session_state["df_extrato"] is not None:
+        modo = st.session_state.get("modo", "alterdata")
+        nome_modo = NOMES_MODO[modo]
+        df = st.session_state["df_extrato"]
+        eventos_list = st.session_state.get("eventos_list", [])
+        ausentes = st.session_state.get("codigos_ausentes", [])
+        mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
+        zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
+        eh_receita = st.session_state.get("eh_receita_lote", False)
+
+        # PAINEL DE IDENTIFICAÇÃO DE RECEITA OU DESPESA
+        if eh_receita:
+            st.success("💰 **TIPO DE OPERAÇÃO IDENTIFICADA: RECEITA (SERVIÇOS PRESTADOS)**\n\nO CNPJ da empresa é o mesmo do prestador nas notas.")
+        else:
+            st.info("🛒 **TIPO DE OPERAÇÃO IDENTIFICADA: DESPESA (SERVIÇOS TOMADOS)**\n\nO CNPJ da empresa é diferente do prestador nas notas.")
+
+        if ausentes:
+            if eh_dono:
+                st.warning(f"⚠️ Existem códigos sem conta de {'RECEITA' if eh_receita else 'DESPESA'} {nome_modo} cadastrada!")
+                st.write("Configure abaixo **um a um**. Pressione **Enter** em cada caixa para salvar individualmente:")
+                
+                conta_padrao = CONTAS[modo]["credito_receita"] if eh_receita else CONTAS[modo]["debito_padrao"]
+
+                for cod in list(ausentes):
+                    desc_salvar = mapa_contas.get(cod, {}).get("descricao") or mapa_tipo_servico_xml.get(cod, "Descrição")
+                    
+                    with st.form(key=f"form_single_xml_{modo}_{cod}"):
+                        st.markdown(f"#### 📌 Código: `{cod}`")
+                        st.info(f"📄 **Descrição:** {cod} - {desc_salvar}")
+
+                        label_campo = f"Informe a conta Crédito (RECEITA) {nome_modo}:" if eh_receita else f"Informe a conta Débito (DESPESA) {nome_modo}:"
+                        nova_conta = st.text_input(
+                            label_campo,
+                            value=conta_padrao,
+                            key=f"input_single_xml_{modo}_{cod}",
+                        )
+                        btn_salvar_indiv = st.form_submit_button(f"💾 Salvar Conta para Código {cod}")
+
+                        if btn_salvar_indiv:
+                            c_inf = nova_conta.strip() or conta_padrao
+                            existente = mapa_contas.get(cod, {"descricao": desc_salvar, "conta": "", "conta_dominio": "", "conta_rec": "", "conta_dominio_rec": ""})
+                            existente["descricao"] = existente.get("descricao") or desc_salvar
+                            
+                            if eh_receita:
+                                if modo == "dominio":
+                                    existente["conta_dominio_rec"] = c_inf
+                                else:
+                                    existente["conta_rec"] = c_inf
+                            else:
+                                if modo == "dominio":
+                                    existente["conta_dominio"] = c_inf
+                                else:
+                                    existente["conta"] = c_inf
+
+                            mapa_contas[cod] = existente
+
+                            salvar_banco_dados_github(mapa_contas, caminho_arquivo_bd)
+                            st.session_state["codigos_ausentes"].remove(cod)
+                            st.success(f"Conta para o código {cod} salva no plano!")
+                            st.rerun()
+                    st.divider()
+            else:
+                st.error(f"⚠️ Os códigos `{', '.join(ausentes)}` não estão cadastrados. Solicite ao dono deste plano que adicione as contas.")
+
+        else:
+            st.subheader(f"🧾 Contas dos Impostos e Conta Contrapartida - {nome_modo}")
+            padrao = CONTAS[modo]
+            
+            rotulo_principal = "Clientes (Débito)" if eh_receita else "Fornecedores (Crédito)"
+            campos_contas = [
+                ("credito_principal", rotulo_principal),
+                ("pcc", "PIS / COFINS / CSLL"),
+                ("irrf", "IRRF"),
+                ("inss", "INSS"),
+                ("iss", "ISS"),
+                ("historico", "Histórico Padrão"),
+            ]
+
+            contas_editadas = dict(padrao)
+            colunas_contas = st.columns(len(campos_contas))
+            for coluna, (chave, rotulo) in zip(colunas_contas, campos_contas):
+                with coluna:
+                    v_dig = st.text_input(rotulo, value=padrao[chave], key=f"conta_sieg_{modo}_{chave}")
+                    contas_editadas[chave] = v_dig.strip() or padrao[chave]
+
+            df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo, contas_editadas, eh_receita=eh_receita)
+            df_substituidas = gerar_aba_substituidas(eventos_list, df)
+            nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
+
+            st.subheader(f"📊 Prévia - Aba {nome_aba}")
+            st.dataframe(df_lancamentos, use_container_width=True)
+
+            buffer_excel = io.BytesIO()
+            with pd.ExcelWriter(buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy") as writer:
+                df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
+                df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+                if not df_substituidas.empty:
+                    df_substituidas.to_excel(writer, index=False, sheet_name="Notas Canceladas")
+
+            st.markdown("---")
+            st.subheader("📥 Downloads Disponíveis")
+
+            if modo == "dominio":
+                lote_inicial = st.number_input("Nº do primeiro lote (Domínio)", min_value=1, value=1, step=1)
+                txt_dominio = gerar_txt_dominio(df_lancamentos, lote_inicial)
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.download_button("📄 Baixar Layout Domínio (.txt)", data=txt_dominio, file_name="importacao_dominio.txt", mime="text/plain")
+                with col2:
+                    st.download_button("📊 Baixar Planilha Domínio (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_dominio.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                with col3:
+                    if zip_pdf_bytes:
+                        st.download_button("📦 Baixar PDFs Organizados (.zip)", data=zip_pdf_bytes, file_name="NFS_PDFs_Organizados.zip", mime="application/zip")
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button("📊 Baixar Planilha Alterdata (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_alterdata.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                with col2:
+                    if zip_pdf_bytes:
+                        st.download_button("📦 Baixar PDFs Organizados (.zip)", data=zip_pdf_bytes, file_name="NFS_PDFs_Organizados.zip", mime="application/zip")
