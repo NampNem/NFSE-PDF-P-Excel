@@ -138,7 +138,8 @@ def codigo_precisa_cadastro(mapa, cod, modo):
         return True
     if modo == "dominio":
         return not str(dados.get("conta_dominio", "") or "").strip()
-    return False
+    else:
+        return not str(dados.get("conta", "") or "").strip()
 
 
 def validar_retencoes(v_serv, v_liq, impostos, tol=0.02):
@@ -166,7 +167,7 @@ def validar_retencoes(v_serv, v_liq, impostos, tol=0.02):
 
 
 # ============================================================
-# GERENCIAMENTO DE BANCO DE DADOS COM PROPRIEDADE
+# GERENCIAMENTO DE BANCO DE DADOS E PERMISSÕES (GITHUB)
 # ============================================================
 def obter_nome_arquivo_bd(usuario_id=None, empresa_id=None):
     if empresa_id:
@@ -185,7 +186,7 @@ def eh_proprietario_do_banco(nome_arquivo, usuario_logado, empresas_planos=None)
     if empresas_planos and isinstance(empresas_planos, dict):
         for cod_emp, dados in empresas_planos.items():
             if f"plano_empresa_{cod_emp}.xlsx" == nome_arquivo:
-                return dados.get("criador") == usuario_logado
+                return str(dados.get("criador")) == str(usuario_logado)
 
     return False
 
@@ -252,11 +253,11 @@ def salvar_banco_dados_github(mapa, nome_arquivo="banco_de_dados.xlsx"):
                     f"Criando BD: {nome_arquivo}",
                     novo_conteudo,
                 )
-            st.success(f"Banco de Dados ({nome_arquivo}) salvo no GitHub!")
+            st.success(f"Plano de Contas ({nome_arquivo}) salvo no GitHub com sucesso!")
         else:
-            st.warning("Salvo apenas na sessão local.")
+            st.warning("Salvo apenas localmente (sem token configurado).")
     except Exception as e:
-        st.error(f"Erro ao salvar no GitHub ({nome_arquivo}): {e}")
+        st.error(f"Erro ao sincronizar com o GitHub ({nome_arquivo}): {e}")
 
 
 def deletar_conta_do_banco(mapa, codigo_deletar, nome_arquivo="banco_de_dados.xlsx"):
@@ -268,7 +269,7 @@ def deletar_conta_do_banco(mapa, codigo_deletar, nome_arquivo="banco_de_dados.xl
 
 
 # ============================================================
-# PARSER DE XML E RELATÓRIOS
+# PARSER DE XML E GERADOR DE RELATÓRIOS
 # ============================================================
 def extrair_xml(caminho_ou_conteudo):
     if isinstance(caminho_ou_conteudo, bytes):
@@ -632,7 +633,7 @@ def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
 
 
 # ============================================================
-# PÁGINA STREAMLIT SIEG XML
+# PÁGINA STREAMLIT SIEG XML (ENTRADA 1 POR 1 AO APERTAR ENTER)
 # ============================================================
 def pagina_sieg_xml(mapa_contas=None, nome_arquivo_bd="banco_de_dados.xlsx", eh_dono=True):
     st.title("📄 SIEG XML PARA Importação")
@@ -765,42 +766,43 @@ def pagina_sieg_xml(mapa_contas=None, nome_arquivo_bd="banco_de_dados.xlsx", eh_
 
         if ausentes:
             if eh_dono:
-                st.warning(f"⚠️ Existem códigos sem conta {nome_modo} cadastrada!")
+                st.warning(f"⚠️ Existem códigos sem conta {nome_modo} cadastrada neste Plano de Contas!")
+                st.write("Configure abaixo **um a um**. Pressione **Enter** em cada caixa para salvar individualmente:")
                 conta_padrao = CONTAS[modo]["debito_padrao"]
 
-                with st.form("form_novos_codigos_sieg"):
-                    novos_cadastros = {}
-                    for cod in ausentes:
-                        desc_salvar = mapa_contas.get(cod, {}).get("descricao") or mapa_tipo_servico_xml.get(cod, "Descrição")
-                        st.markdown(f"### 📌 Código: `{cod}`")
+                # Formulários 1 por 1 individuais
+                for cod in list(ausentes):
+                    desc_salvar = mapa_contas.get(cod, {}).get("descricao") or mapa_tipo_servico_xml.get(cod, "Descrição")
+                    
+                    with st.form(key=f"form_single_xml_{modo}_{cod}"):
+                        st.markdown(f"#### 📌 Código: `{cod}`")
                         st.info(f"📄 **Descrição do XML:** {cod} - {desc_salvar}")
 
                         nova_conta = st.text_input(
-                            f"Informe a conta débito {nome_modo} para o código {cod}:",
-                            key=f"input_xml_{modo}_{cod}",
+                            f"Informe a conta débito {nome_modo} para `{cod}`:",
+                            value=conta_padrao,
+                            key=f"input_single_xml_{modo}_{cod}",
                         )
-                        novos_cadastros[cod] = {"descricao": desc_salvar, "conta": nova_conta}
-                        st.divider()
+                        btn_salvar_indiv = st.form_submit_button(f"💾 Salvar Conta para Código {cod}")
 
-                    salvar_btn = st.form_submit_button("💾 Confirmar e Salvar")
+                        if btn_salvar_indiv:
+                            c_inf = nova_conta.strip() or conta_padrao
+                            existente = mapa_contas.get(cod, {"descricao": desc_salvar, "conta": "", "conta_dominio": ""})
+                            existente["descricao"] = existente.get("descricao") or desc_salvar
+                            
+                            if modo == "dominio":
+                                existente["conta_dominio"] = c_inf
+                            else:
+                                existente["conta"] = c_inf
+                            mapa_contas[cod] = existente
 
-                if salvar_btn:
-                    for cod, dados in novos_cadastros.items():
-                        c_inf = dados["conta"].strip() or conta_padrao
-                        existente = mapa_contas.get(cod, {"descricao": dados["descricao"], "conta": "", "conta_dominio": ""})
-                        existente["descricao"] = existente.get("descricao") or dados["descricao"]
-                        if modo == "dominio":
-                            existente["conta_dominio"] = c_inf
-                        else:
-                            existente["conta"] = c_inf
-                        mapa_contas[cod] = existente
-
-                    salvar_banco_dados_github(mapa_contas, nome_arquivo_bd)
-                    st.session_state["codigos_ausentes"] = []
-                    st.success("Plano de Contas Atualizado!")
-                    st.rerun()
+                            salvar_banco_dados_github(mapa_contas, nome_arquivo_bd)
+                            st.session_state["codigos_ausentes"].remove(cod)
+                            st.success(f"Conta para o código {cod} salva no plano!")
+                            st.rerun()
+                    st.divider()
             else:
-                st.error(f"⚠️️ Os códigos `{', '.join(ausentes)}` não estão cadastrados. Solicite ao dono deste plano que adicione as contas.")
+                st.error(f"⚠️ Os códigos `{', '.join(ausentes)}` não estão cadastrados. Solicite ao dono deste plano que adicione as contas.")
 
         else:
             st.subheader(f"🧾 Contas dos impostos retidos - {nome_modo}")
