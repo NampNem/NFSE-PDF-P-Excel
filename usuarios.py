@@ -28,4 +28,9 @@ USUARIOS_PERMITIDOS = {
     "123": "CT - RENATA NASCIMENTO",
     "124": "CT - PAULO FREITAS",
     "125": "CT - RAYANE",
+    "126": "CO - WALLACE",
+    "127": "CO - TAYANNA",
+    "128": "CT - THAIS",
+    "129": "CT - SELMA",
+    "130": "CT - RAFAEL",
 }
