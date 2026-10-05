@@ -273,6 +273,12 @@ if pagina_atual != "menu":
         st.session_state["pagina"] = "menu"
         st.rerun()
 
+    # Botão também na tela principal (a barra superior está escondida, então a
+    # barra lateral pode ficar recolhida e sem como abrir)
+    if st.button("🏠 Voltar ao Menu Principal", key="btn_voltar_topo"):
+        st.session_state["pagina"] = "menu"
+        st.rerun()
+
 # ------------------------------------------------------------
 # OPÇÃO 1: SIEG XML
 # ------------------------------------------------------------
