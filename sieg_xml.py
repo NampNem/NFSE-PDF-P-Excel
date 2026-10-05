@@ -918,6 +918,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
         # CÓDIGOS DO LOTE + EMPRESA DE EXEMPLO (sempre visível, para
         # ajudar a classificar cada código de tributação)
         # ------------------------------------------------------------
+        linhas_codigos = []
         if not df.empty and "Código Tributação" in df.columns:
             chave_conta = (
                 ("conta_dominio_rec" if eh_receita else "conta_dominio")
@@ -925,7 +926,6 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                 else ("conta_rec" if eh_receita else "conta")
             )
             rotulo_empresa = "Cliente de exemplo" if eh_receita else "Empresa de exemplo"
-            linhas_codigos = []
             for cod, grupo in df.groupby(df["Código Tributação"].astype(str).str.strip()):
                 if not cod:
                     continue
@@ -1029,6 +1029,8 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
             with pd.ExcelWriter(buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy") as writer:
                 df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
                 df.drop(columns=["Nome do Tomador"], errors="ignore").to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+                if linhas_codigos:
+                    pd.DataFrame(linhas_codigos).to_excel(writer, index=False, sheet_name="Códigos do Lote")
                 if not df_substituidas.empty:
                     df_substituidas.to_excel(writer, index=False, sheet_name="Notas Canceladas")
 
