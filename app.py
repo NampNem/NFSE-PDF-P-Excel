@@ -1,52 +1,3 @@
-import streamlit as st
-
-# ============================================================
-# ARQUIVO PRINCIPAL (MENU)
-# ============================================================
-st.set_page_config(page_title="Meus Sistemas", page_icon="🗂️", layout="wide")
-
-
-def menu_principal():
-    st.title("🗂️ Meus Sistemas")
-    st.write("Escolha o sistema que deseja usar:")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("📄 SIEG XML PARA Importação", use_container_width=True):
-            st.session_state["pagina"] = "sieg"
-            st.rerun()
-    with col2:
-        if st.button("📊 Excel NFS-e (Portal Nacional)", use_container_width=True):
-            st.session_state["pagina"] = "excel_nfse"
-            st.rerun()
-    with col3:
-        if st.button("🏢 Empresas", use_container_width=True):
-            st.session_state["pagina"] = "empresas"
-            st.session_state["empresa_pagina"] = "lista"
-            st.rerun()
-
-
-# ============================================================
-# NAVEGAÇÃO ENTRE OS SISTEMAS
-# ============================================================
-pagina_atual = st.session_state.get("pagina", "menu")
-
-# Botão na barra lateral para voltar ao menu
-if pagina_atual != "menu":
-    if st.sidebar.button("⬅️ Voltar ao Menu Principal"):
-        st.session_state["pagina"] = "menu"
-        st.rerun()
-
-# ------------------------------------------------------------
-# OPÇÃO 1: SIEG XML / PDF
-# ------------------------------------------------------------
-if pagina_atual == "sieg":
-    from sieg_xml import pagina_sieg_xml
-    pagina_sieg_xml()
-
-# ------------------------------------------------------------
-# OPÇÃO 2: LEITOR DE EXCEL (REGRAS V2)
-# ------------------------------------------------------------
 elif pagina_atual == "excel_nfse":
     import io
     import pandas as pd
@@ -83,21 +34,31 @@ elif pagina_atual == "excel_nfse":
                 df_nfse = pd.DataFrame(registros)
                 mapa_contas = carregar_banco_dados_github()
 
+                # Mapeia código -> descrição do serviço da planilha
+                mapa_descricoes = {}
                 codigos_ausentes = []
+                
                 if not df_nfse.empty:
-                    for cod in df_nfse["Código Tributação"].unique():
+                    for _, row in df_nfse.iterrows():
+                        cod = row.get("Código Tributação")
+                        tipo = row.get("Tipo de Serviço")
+                        if cod and cod not in mapa_descricoes:
+                            mapa_descricoes[cod] = tipo
                         if cod and not mapa_contas.get(cod):
-                            codigos_ausentes.append(cod)
+                            if cod not in codigos_ausentes:
+                                codigos_ausentes.append(cod)
 
                 st.session_state["df_excel_processado"] = df_nfse
                 st.session_state["df_excel_ignoradas"] = pd.DataFrame(ignoradas)
                 st.session_state["excel_codigos_ausentes"] = codigos_ausentes
+                st.session_state["mapa_descricoes_excel"] = mapa_descricoes
 
     # GERAÇÃO E EXIBIÇÃO DOS RELATÓRIOS
     if "df_excel_processado" in st.session_state and not st.session_state["df_excel_processado"].empty:
         df_nfse = st.session_state["df_excel_processado"]
         df_ignoradas = st.session_state.get("df_excel_ignoradas", pd.DataFrame())
         ausentes = st.session_state.get("excel_codigos_ausentes", [])
+        mapa_descricoes = st.session_state.get("mapa_descricoes_excel", {})
         modo = st.session_state.get("modo_excel", "alterdata")
         nome_modo = NOMES_MODO[modo]
         mapa_contas = carregar_banco_dados_github()
@@ -105,24 +66,30 @@ elif pagina_atual == "excel_nfse":
         st.info(f"Modo de processamento: **{nome_modo}**")
 
         if ausentes:
-            st.warning(f"⚠️️ Existem códigos de serviço sem conta {nome_modo} cadastrada!")
+            st.warning(f"⚠️ Existem códigos de serviço sem conta {nome_modo} cadastrada!")
             conta_padrao = CONTAS[modo]["debito_padrao"]
 
             with st.form("form_novos_codigos_v2"):
                 novos = {}
                 for cod in ausentes:
+                    descr = mapa_descricoes.get(cod, "Descrição do Serviço")
                     st.markdown(f"### 📌 Código: `{cod}`")
+                    st.info(f"📄 **Serviço Prestado:** {cod} - {descr}")
+
                     conta_in = st.text_input(
                         f"Informe a conta Débito {nome_modo} para o código {cod}:",
                         value=conta_padrao,
                         key=f"v2_{cod}"
                     )
-                    novos[cod] = conta_in
+                    novos[cod] = {"conta": conta_in, "descricao": descr}
+                    st.divider()
                 
                 if st.form_submit_button("💾 Salvar e Continuar"):
-                    for cod, c_val in novos.items():
-                        c_limpa = c_val.strip() or conta_padrao
-                        existente = mapa_contas.get(cod, {"descricao": f"Serviço {cod}", "conta": "", "conta_dominio": ""})
+                    for cod, dados in novos.items():
+                        c_limpa = dados["conta"].strip() or conta_padrao
+                        existente = mapa_contas.get(cod, {"descricao": dados["descricao"], "conta": "", "conta_dominio": ""})
+                        existente["descricao"] = existente.get("descricao") or dados["descricao"]
+                        
                         if modo == "dominio":
                             existente["conta_dominio"] = c_limpa
                         else:
@@ -153,7 +120,6 @@ elif pagina_atual == "excel_nfse":
                     v_dig = st.text_input(rotulo, value=padrao.get(chave, ""), key=f"v2_cnt_{modo}_{chave}")
                     contas_editadas[chave] = v_dig.strip() or padrao.get(chave, "")
 
-            # Gera os lançamentos utilizando as funções já existentes do sieg_xml.py
             df_lancamentos = gerar_aba_alterdata(df_nfse, mapa_contas, modo, contas_editadas)
             nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
 
@@ -183,13 +149,3 @@ elif pagina_atual == "excel_nfse":
                     st.download_button("📊 Baixar Planilha Domínio (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_dominio_excel.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
                 st.download_button("📊 Baixar Planilha Alterdata (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_alterdata_excel.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# ------------------------------------------------------------
-# OPÇÃO 3: EMPRESAS
-# ------------------------------------------------------------
-elif pagina_atual == "empresas":
-    from empresas import pagina_empresas
-    pagina_empresas()
-
-else:
-    menu_principal()
