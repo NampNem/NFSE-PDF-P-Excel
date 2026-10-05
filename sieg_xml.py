@@ -896,9 +896,18 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
         eventos_list = st.session_state.get("eventos_list", [])
         ausentes = st.session_state.get("codigos_ausentes", [])
         mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
-        mapa_empresa_exemplo = st.session_state.get("mapa_empresa_exemplo", {})
         zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
         eh_receita = st.session_state.get("eh_receita_lote", False)
+        # Empresa de exemplo calculada direto do df (não depende de ter reprocessado
+        # depois de uma atualização do código). Despesa -> prestador; receita -> tomador.
+        mapa_empresa_exemplo = {}
+        _col_nome = "Nome do Tomador" if eh_receita else "Nome da Empresa"
+        if not df.empty and _col_nome in df.columns:
+            for _, _r in df.iterrows():
+                _cod = str(_r.get("Código Tributação", "") or "").strip()
+                _nome = str(_r.get(_col_nome, "") or "").strip()
+                if _cod and _nome and _nome.lower() != "nan" and _cod not in mapa_empresa_exemplo:
+                    mapa_empresa_exemplo[_cod] = _nome
 
         if eh_receita:
             st.success("💰 **TIPO DE OPERAÇÃO IDENTIFICADA: RECEITA (SERVIÇOS PRESTADOS)**\n\nO CNPJ da empresa é o mesmo do prestador nas notas.")
