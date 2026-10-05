@@ -7,6 +7,22 @@ from usuarios import USUARIOS_PERMITIDOS
 
 st.set_page_config(page_title="Meus Sistemas", page_icon="🗂️", layout="wide")
 
+# Esconder a barra de ferramentas superior completa do Streamlit
+st.markdown(
+    """
+    <style>
+    /* Oculta o cabeçalho inteiro e a barra de ações/ferramentas */
+    header {visibility: hidden !important;}
+    .stAppHeader {display: none !important;}
+    [data-testid="stHeader"] {display: none !important;}
+    [data-testid="stToolbar"] {display: none !important;}
+    #MainMenu {visibility: hidden !important;}
+    footer {visibility: hidden !important;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ============================================================
 # TELA DE LOGIN
