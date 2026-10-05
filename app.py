@@ -42,6 +42,7 @@ def selecionar_plano_de_contas():
         salvar_empresas_github,
         obter_caminho_relativo_bd,
         eh_proprietario_do_banco,
+        limpar_cnpj,
     )
 
     user_id = st.session_state["usuario_logado"]
@@ -89,9 +90,17 @@ def selecionar_plano_de_contas():
                     st.error("Preencha o Código, o CNPJ e o Nome da Empresa!")
 
     caminho_arquivo_ativo = None
+    cnpj_empresa_ativa = ""
+    cod_emp_ativo = None
+
     if emp_sel != "Selecione uma Empresa...":
-        cod_emp = emp_sel.split(" - ")[0]
-        caminho_arquivo_ativo = obter_caminho_relativo_bd(empresa_id=cod_emp)
+        cod_emp_ativo = emp_sel.split(" - ")[0]
+        caminho_arquivo_ativo = obter_caminho_relativo_bd(empresa_id=cod_emp_ativo)
+        dados_emp_sel = empresas.get(cod_emp_ativo, {})
+        cnpj_empresa_ativa = limpar_cnpj(dados_emp_sel.get("cnpj", ""))
+
+    st.session_state["empresa_ativa_cod"] = cod_emp_ativo
+    st.session_state["empresa_ativa_cnpj"] = cnpj_empresa_ativa
 
     if caminho_arquivo_ativo:
         eh_dono = eh_proprietario_do_banco(caminho_arquivo_ativo, user_id, st.session_state["empresas_planos"])
@@ -115,74 +124,89 @@ def pagina_alterar_plano_de_contas():
         carregar_banco_dados_github,
         salvar_banco_dados_github,
         deletar_conta_do_banco,
+        deletar_empresa_completa_github,
     )
 
     st.title("📝 Alterar Plano de Contas")
     
     mapa_contas, caminho_arquivo_ativo, eh_dono = selecionar_plano_de_contas()
+    cod_emp_ativo = st.session_state.get("empresa_ativa_cod")
     st.markdown("---")
 
-    if not mapa_contas and caminho_arquivo_ativo:
-        st.info("Este Plano de Contas está em branco no momento.")
-
-    elif mapa_contas and caminho_arquivo_ativo:
+    if caminho_arquivo_ativo and cod_emp_ativo:
         if eh_dono:
-            st.subheader("⚙️ Gerenciar / Alterar Contas Existentes")
-            cod_sel_editar = st.selectbox("Selecione o Código do Serviço para alterar:", list(mapa_contas.keys()))
-            
-            if cod_sel_editar:
-                dados_atuais = mapa_contas[cod_sel_editar]
-                st.write(f"**Serviço:** {dados_atuais.get('descricao', 'Sem Descrição')}")
-                
-                c_alt, c_dom, c_btns = st.columns([2, 2, 2])
-                with c_alt:
-                    nova_cnt_alt = st.text_input("Conta Alterdata:", value=str(dados_atuais.get("conta", "")), key=f"edit_alt_{cod_sel_editar}")
-                with c_dom:
-                    nova_cnt_dom = st.text_input("Conta Domínio:", value=str(dados_atuais.get("conta_dominio", "")), key=f"edit_dom_{cod_sel_editar}")
-                
-                with c_btns:
-                    st.write("")
-                    st.write("")
-                    col_salv, col_del = st.columns(2)
-                    with col_salv:
-                        if st.button("💾 Salvar Alteração", key=f"btn_save_{cod_sel_editar}", type="primary"):
-                            mapa_contas[cod_sel_editar]["conta"] = nova_cnt_alt.strip()
-                            mapa_contas[cod_sel_editar]["conta_dominio"] = nova_cnt_dom.strip()
-                            salvar_banco_dados_github(mapa_contas, caminho_arquivo_ativo)
-                            st.success("Conta atualizada no GitHub!")
+            # BOTÃO DE EXCLUSÃO DA EMPRESA INTEIRA
+            col_tit, col_del_emp = st.columns([3, 1])
+            with col_del_emp:
+                with st.popover("🗑️ Apagar Empresa / Plano", use_container_width=True):
+                    st.warning("⚠️ Esta ação vai apagar permanentemente esta empresa e o plano de contas dela!")
+                    st.write(f"Empresa Código: **{cod_emp_ativo}**")
+                    if st.button("Confirmar Exclusão Definitiva", type="primary", key="btn_confirm_del_emp"):
+                        if deletar_empresa_completa_github(cod_emp_ativo, st.session_state["empresas_planos"]):
+                            st.success("Empresa e Plano de Contas apagados com sucesso!")
+                            st.session_state["empresas_planos"] = {}
                             st.rerun()
-                    with col_del:
-                        if st.button("❌ Apagar Código", key=f"btn_del_{cod_sel_editar}"):
-                            if deletar_conta_do_banco(mapa_contas, cod_sel_editar, caminho_arquivo_ativo):
-                                st.success(f"Código {cod_sel_editar} apagado com sucesso!")
-                                st.rerun()
 
-            st.markdown("---")
-            st.subheader("📊 Tabela Completa das Contas Cadastradas")
-            
-            linhas_tbl = []
-            for cod_item, d_item in mapa_contas.items():
-                linhas_tbl.append({
-                    "Código Serviço": cod_item,
-                    "Descrição": d_item.get("descricao", ""),
-                    "Conta Alterdata": d_item.get("conta", ""),
-                    "Conta Domínio": d_item.get("conta_dominio", "")
-                })
-            st.dataframe(pd.DataFrame(linhas_tbl), use_container_width=True)
+            if mapa_contas:
+                st.subheader("⚙️ Gerenciar / Alterar Contas Existentes")
+                cod_sel_editar = st.selectbox("Selecione o Código do Serviço para alterar:", list(mapa_contas.keys()))
+                
+                if cod_sel_editar:
+                    dados_atuais = mapa_contas[cod_sel_editar]
+                    st.write(f"**Serviço:** {dados_atuais.get('descricao', 'Sem Descrição')}")
+                    
+                    c_alt, c_dom, c_btns = st.columns([2, 2, 2])
+                    with c_alt:
+                        nova_cnt_alt = st.text_input("Conta Alterdata:", value=str(dados_atuais.get("conta", "")), key=f"edit_alt_{cod_sel_editar}")
+                    with c_dom:
+                        nova_cnt_dom = st.text_input("Conta Domínio:", value=str(dados_atuais.get("conta_dominio", "")), key=f"edit_dom_{cod_sel_editar}")
+                    
+                    with c_btns:
+                        st.write("")
+                        st.write("")
+                        col_salv, col_del = st.columns(2)
+                        with col_salv:
+                            if st.button("💾 Salvar Alteração", key=f"btn_save_{cod_sel_editar}", type="primary"):
+                                mapa_contas[cod_sel_editar]["conta"] = nova_cnt_alt.strip()
+                                mapa_contas[cod_sel_editar]["conta_dominio"] = nova_cnt_dom.strip()
+                                salvar_banco_dados_github(mapa_contas, caminho_arquivo_ativo)
+                                st.success("Conta atualizada no GitHub!")
+                                st.rerun()
+                        with col_del:
+                            if st.button("❌ Apagar Código", key=f"btn_del_{cod_sel_editar}"):
+                                if deletar_conta_do_banco(mapa_contas, cod_sel_editar, caminho_arquivo_ativo):
+                                    st.success(f"Código {cod_sel_editar} apagado com sucesso!")
+                                    st.rerun()
+
+                st.markdown("---")
+                st.subheader("📊 Tabela Completa das Contas Cadastradas")
+                
+                linhas_tbl = []
+                for cod_item, d_item in mapa_contas.items():
+                    linhas_tbl.append({
+                        "Código Serviço": cod_item,
+                        "Descrição": d_item.get("descricao", ""),
+                        "Conta Alterdata": d_item.get("conta", ""),
+                        "Conta Domínio": d_item.get("conta_dominio", "")
+                    })
+                st.dataframe(pd.DataFrame(linhas_tbl), use_container_width=True)
+            else:
+                st.info("Este Plano de Contas está em branco no momento. Ele será preenchido automaticamente ao processar notas.")
 
         else:
-            st.error("⚠️ Você não tem permissão para alterar este Plano de Contas. Apenas o criador (dono) do plano pode fazer alterações.")
+            st.error("⚠️ Você não tem permissão para alterar ou apagar esta empresa. Apenas o criador (dono) do plano tem essa autorização.")
             
-            st.subheader("📊 Visualização das Contas (Modo Leitura)")
-            linhas_tbl = []
-            for cod_item, d_item in mapa_contas.items():
-                linhas_tbl.append({
-                    "Código Serviço": cod_item,
-                    "Descrição": d_item.get("descricao", ""),
-                    "Conta Alterdata": d_item.get("conta", ""),
-                    "Conta Domínio": d_item.get("conta_dominio", "")
-                })
-            st.dataframe(pd.DataFrame(linhas_tbl), use_container_width=True)
+            if mapa_contas:
+                st.subheader("📊 Visualização das Contas (Modo Leitura)")
+                linhas_tbl = []
+                for cod_item, d_item in mapa_contas.items():
+                    linhas_tbl.append({
+                        "Código Serviço": cod_item,
+                        "Descrição": d_item.get("descricao", ""),
+                        "Conta Alterdata": d_item.get("conta", ""),
+                        "Conta Domínio": d_item.get("conta_dominio", "")
+                    })
+                st.dataframe(pd.DataFrame(linhas_tbl), use_container_width=True)
 
 
 # ============================================================
@@ -242,6 +266,7 @@ elif pagina_atual == "excel_nfse":
         salvar_banco_dados_github,
         gerar_aba_alterdata,
         gerar_txt_dominio,
+        verificar_e_exibir_conferencia_cnpj,
         CONTAS,
         NOMES_MODO
     )
@@ -293,6 +318,10 @@ elif pagina_atual == "excel_nfse":
             mapa_descricoes = st.session_state.get("mapa_descricoes_excel", {})
             modo = st.session_state.get("modo_excel", "alterdata")
             nome_modo = NOMES_MODO[modo]
+
+            # CONFERÊNCIA AUTOMÁTICA DE CNPJ DO PRESTADOR
+            cnpj_empresa_sel = st.session_state.get("empresa_ativa_cnpj", "")
+            verificar_e_exibir_conferencia_cnpj(df_nfse, cnpj_empresa_sel)
 
             st.info(f"Modo de processamento: **{nome_modo}**")
 
