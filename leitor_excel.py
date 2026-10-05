@@ -92,6 +92,8 @@ def extrair_nfse_excel(origem, formatar_valor_fn):
             continue
 
         nome_empresa = _texto(row.get("Nome Prestador"))
+        # Tomador (cliente): usado como "empresa de exemplo" quando o lote é de RECEITA
+        nome_tomador = _texto(row.get("Nome Tomador"))
         v_serv = _num(row.get("Valor do Serviço (R$)"))
         v_inss = _num(row.get("Contrib. Previd. Ret. (R$)"))
         v_irrf = _num(row.get("IRRF (R$)"))
@@ -139,6 +141,7 @@ def extrair_nfse_excel(origem, formatar_valor_fn):
             "Data Competência": _data_iso(row.get("Data Geração")),
             "CNPJ Prestador": cnpj_formatado,
             "Nome da Empresa": nome_empresa,
+            "Nome do Tomador": nome_tomador,
             "Código Tributação": codigo_tributacao,
             "Tipo de Serviço": tipo_servico,
             "Valor do Serviço": v_serv,
