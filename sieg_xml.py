@@ -45,16 +45,17 @@ NOMES_MODO = {"alterdata": "Alterdata", "dominio": "Domínio"}
 # FUNÇÕES UTILITÁRIAS DE FORMATAÇÃO E LIMPEZA
 # ============================================================
 def limpar_cnpj(cnpj):
+    """Remove pontuações (. - / e espaços) mantendo apenas letras e números."""
     if not cnpj:
         return ""
-    return re.sub(r"\D", "", str(cnpj)).strip()
+    return re.sub(r"[^a-zA-Z0-9]", "", str(cnpj)).strip().upper()
 
 
 def extrair_codigo_do_banco(valor):
     if valor is None:
         return ""
     texto = str(valor).strip()
-    m = re.match(r"^(\d{2,8})\s*-\s*.+", texto)
+    m = re.match(r"^([a-zA-Z0-9]{2,10})\s*-\s*.+", texto)
     if m:
         return m.group(1)
     return texto
@@ -64,7 +65,7 @@ def extrair_descricao_do_banco(valor):
     if valor is None:
         return ""
     texto = str(valor).strip()
-    m = re.match(r"^\d{2,8}\s*-\s*(.+)$", texto)
+    m = re.match(r"^[a-zA-Z0-9]{2,10}\s*-\s*(.+)$", texto)
     if m:
         return m.group(1).strip()
     return ""
@@ -476,7 +477,7 @@ def extrair_xml(caminho_ou_conteudo):
         "Chave NFS-e": chave_nfse,
         "Número da NFS-e": numero_nfse,
         "Data Competência": data_competencia,
-        "CNPJ Prestador": cnpj_prestador,
+        "CNPJ Prestador": limpar_cnpj(cnpj_prestador),
         "Nome da Empresa": nome_empresa,
         "Código Tributação": codigo_tributacao,
         "Tipo de Serviço": tipo_servico,
@@ -515,6 +516,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
         data_comp = converter_data_obj(row.get("Data Competência", ""))
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
+        descr_servico = str(mapa_contas.get(cod_trib, {}).get("descricao") or row.get("Tipo de Serviço") or "SERVIÇO").strip()
 
         if eh_receita:
             # RECEITA: Débito = Clientes e Crédito = Receita de Serviços
@@ -525,7 +527,12 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
             conta_deb = conta_debito_do_banco(mapa_contas, cod_trib, modo)
             conta_cred = contas["credito_principal"]
 
-        desc_padrao = f"NF - {num_nota} {nome_empresa}".strip()
+        # HISTÓRICO EM DUAS LINHAS:
+        # Linha 1: 00000 - serviço tal (NF - XXX)
+        # Linha 2: nome da empresa prestadora
+        desc_linha1 = f"{cod_trib} - {descr_servico} (NF {num_nota})".strip()
+        desc_linha2 = f"{nome_empresa}".strip()
+        desc_padrao = f"{desc_linha1}\n{desc_linha2}"
 
         val_bruto = converter_valor(row.get("Valor do Serviço")) or 0.0
         val_liquido = converter_valor(row.get("Valor Líquido")) or 0.0
@@ -573,7 +580,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 pcc_retidos.append("CSLL")
 
             if soma_pcc > 0:
-                desc_pcc = f"Retenção PCC s/ NF - {num_nota} {nome_empresa}"
+                desc_pcc = f"Retenção PCC s/ NF {num_nota}\n{nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -585,7 +592,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 })
 
             if str(row.get("IRRF Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_irrf > 0:
-                desc_irrf = f"Retenção IRRF s/ NF - {num_nota} {nome_empresa}"
+                desc_irrf = f"Retenção IRRF s/ NF {num_nota}\n{nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -597,7 +604,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 })
 
             if str(row.get("INSS Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_inss > 0:
-                desc_inss = f"Retenção INSS s/ NF - {num_nota} {nome_empresa}"
+                desc_inss = f"Retenção INSS s/ NF {num_nota}\n{nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -609,7 +616,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 })
 
             if str(row.get("ISS Retido?", "")).strip().upper() == "COM RETENÇÃO" and val_iss > 0:
-                desc_iss = f"Retenção ISS s/ NF - {num_nota} {nome_empresa}"
+                desc_iss = f"Retenção ISS s/ NF {num_nota}\n{nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
@@ -652,6 +659,7 @@ def gerar_txt_dominio(df_dominio, lote_inicial=1):
         valor = converter_valor(r.get("valor")) or 0.0
         valor_txt = f"{valor:.2f}".replace(".", ",")
 
+        # Mantém a quebra de linha tratada para o arquivo de texto
         hist = limpo(r.get("descrição")).replace(";", " ")
 
         if deb:
