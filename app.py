@@ -55,10 +55,12 @@ def selecionar_plano_de_contas():
     col_sel, col_novo = st.columns([2, 1])
 
     with col_sel:
-        opcoes_emp = [
-            f"{cod} - {d['nome']} (Criador: {USUARIOS_PERMITIDOS.get(d['criador'], 'Desconhecido')})" 
-            for cod, d in empresas.items()
-        ]
+        opcoes_emp = []
+        for cod, d in empresas.items():
+            cnpj_str = f" | CNPJ: {d.get('cnpj', 'N/I')}" if d.get('cnpj') else ""
+            criador_str = USUARIOS_PERMITIDOS.get(d.get('criador'), 'Desconhecido')
+            opcoes_emp.append(f"{cod} - {d['nome']}{cnpj_str} (Criador: {criador_str})")
+
         opcoes_emp.insert(0, "Selecione uma Empresa...")
         emp_sel = st.selectbox("Selecione a Empresa:", opcoes_emp)
 
@@ -67,11 +69,14 @@ def selecionar_plano_de_contas():
         with st.popover("➕ Cadastrar Nova Empresa"):
             st.markdown("### 🏢 Criar Plano de Empresa")
             cod_emp = st.text_input("Código da Empresa:")
+            cnpj_emp = st.text_input("CNPJ da Empresa:")
             nome_emp = st.text_input("Nome da Empresa:")
+            
             if st.button("Criar Plano de Contas", type="primary"):
-                if cod_emp and nome_emp:
+                if cod_emp and cnpj_emp and nome_emp:
                     st.session_state["empresas_planos"][cod_emp] = {
                         "nome": nome_emp,
+                        "cnpj": cnpj_emp.strip(),
                         "criador": user_id
                     }
                     salvar_empresas_github(st.session_state["empresas_planos"])
@@ -81,7 +86,7 @@ def selecionar_plano_de_contas():
                     st.success(f"Plano de Contas criado em `{caminho_arq}`!")
                     st.rerun()
                 else:
-                    st.error("Preencha o Código e o Nome da Empresa!")
+                    st.error("Preencha o Código, o CNPJ e o Nome da Empresa!")
 
     caminho_arquivo_ativo = None
     if emp_sel != "Selecione uma Empresa...":
@@ -329,7 +334,7 @@ elif pagina_atual == "excel_nfse":
                         st.divider()
 
                 else:
-                    st.error(f"⚠️️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
+                    st.error(f"⚠️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
 
             else:
                 st.subheader(f"🧾 Contas dos Impostos Retidos - {nome_modo}")
