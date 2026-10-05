@@ -328,12 +328,10 @@ if pagina_atual == "sieg":
 elif pagina_atual == "excel_nfse":
     from sieg_xml import (
         formatar_valor,
-        salvar_banco_dados_github,
         gerar_aba_alterdata,
         gerar_txt_dominio,
         limpar_cnpj,
-        codigo_precisa_cadastro,
-        empresa_exemplo_por_codigo,
+        editor_codigos_lote,
         tabela_codigos_lote,
         CONTAS,
         NOMES_MODO,
@@ -369,94 +367,44 @@ elif pagina_atual == "excel_nfse":
                     eh_receita = bool(cnpj_emp_sel and cnpj_emp_sel in cnpjs_prest_lote)
                     st.session_state["eh_receita_excel"] = eh_receita
 
-                    codigos_ausentes = []
                     if not df_nfse.empty:
                         for _, row in df_nfse.iterrows():
-                            cod = row.get("Código Tributação")
+                            cod = str(row.get("Código Tributação", "") or "").strip()
                             tipo = row.get("Tipo de Serviço")
+                            tipo = "" if pd.isna(tipo) else str(tipo).strip()
                             if cod and cod not in mapa_descricoes:
                                 mapa_descricoes[cod] = tipo
-                            if cod and codigo_precisa_cadastro(mapa_contas, cod, modo, eh_receita=eh_receita):
-                                if cod not in codigos_ausentes:
-                                    codigos_ausentes.append(cod)
 
                     st.session_state["df_excel_processado"] = df_nfse
                     st.session_state["df_excel_ignoradas"] = pd.DataFrame(ignoradas)
-                    st.session_state["excel_codigos_ausentes"] = codigos_ausentes
                     st.session_state["mapa_descricoes_excel"] = mapa_descricoes
 
         if "df_excel_processado" in st.session_state and not st.session_state["df_excel_processado"].empty:
             df_nfse = st.session_state["df_excel_processado"]
             df_ignoradas = st.session_state.get("df_excel_ignoradas", pd.DataFrame())
-            ausentes = st.session_state.get("excel_codigos_ausentes", [])
             mapa_descricoes = st.session_state.get("mapa_descricoes_excel", {})
             modo = st.session_state.get("modo_excel", "alterdata")
             nome_modo = NOMES_MODO[modo]
             eh_receita = st.session_state.get("eh_receita_excel", False)
-
-            # Empresa de exemplo por código (despesa -> prestador; receita -> tomador)
-            mapa_empresa_exemplo = empresa_exemplo_por_codigo(df_nfse, eh_receita)
-            rotulo_exemplo = "Cliente de exemplo" if eh_receita else "Empresa de exemplo"
-            df_codigos_lote = tabela_codigos_lote(df_nfse, mapa_contas, modo, eh_receita, mapa_descricoes)
 
             if eh_receita:
                 st.success("💰 **TIPO DE OPERAÇÃO: RECEITA (SERVIÇOS PRESTADOS)**")
             else:
                 st.info("🛒 **TIPO DE OPERAÇÃO: DESPESA (SERVIÇOS TOMADOS)**")
 
-            if not df_codigos_lote.empty:
-                with st.expander("📋 Códigos de serviço deste lote (com empresa de exemplo)", expanded=True):
-                    st.dataframe(df_codigos_lote, use_container_width=True, hide_index=True)
+            # Tabela editável de códigos do lote (um único botão para salvar)
+            ausentes = editor_codigos_lote(
+                df_nfse, mapa_contas, caminho_arquivo_bd, modo, eh_receita, eh_dono,
+                mapa_descricoes=mapa_descricoes, chave_estado="excel",
+            )
+            df_codigos_lote = tabela_codigos_lote(df_nfse, mapa_contas, modo, eh_receita, mapa_descricoes)
 
             if ausentes:
                 if eh_dono:
-                    st.warning(f"⚠️ Existem códigos de serviço sem conta de {'RECEITA' if eh_receita else 'DESPESA'} {nome_modo} cadastrada!")
-                    st.write("Configure abaixo **um a um**. Pressione **Enter** em cada caixa para salvar individualmente:")
-                    conta_padrao = CONTAS[modo]["credito_receita"] if eh_receita else CONTAS[modo]["debito_padrao"]
-
-                    for cod in list(ausentes):
-                        descr = mapa_descricoes.get(cod, "Descrição do Serviço")
-
-                        with st.form(key=f"form_single_v2_{modo}_{cod}"):
-                            st.markdown(f"#### 📌 Código: `{cod}`")
-                            texto_info = f"📄 **Serviço Prestado:** {cod} - {descr}"
-                            empresa_ex = mapa_empresa_exemplo.get(cod, "")
-                            if empresa_ex:
-                                texto_info += f"\n\n🏢 **{rotulo_exemplo}:** {empresa_ex}"
-                            st.info(texto_info)
-
-                            label_campo = f"Informe a conta Crédito (RECEITA) {nome_modo}:" if eh_receita else f"Informe a conta Débito (DESPESA) {nome_modo}:"
-                            conta_in = st.text_input(
-                                label_campo,
-                                value=conta_padrao,
-                                key=f"input_single_v2_{modo}_{cod}"
-                            )
-                            btn_salvar_indiv = st.form_submit_button(f"💾 Salvar Conta para Código {cod}")
-
-                            if btn_salvar_indiv:
-                                c_limpa = conta_in.strip() or conta_padrao
-                                existente = mapa_contas.get(cod, {"descricao": descr, "conta": "", "conta_dominio": "", "conta_rec": "", "conta_dominio_rec": ""})
-                                existente["descricao"] = existente.get("descricao") or descr
-
-                                if eh_receita:
-                                    if modo == "dominio":
-                                        existente["conta_dominio_rec"] = c_limpa
-                                    else:
-                                        existente["conta_rec"] = c_limpa
-                                else:
-                                    if modo == "dominio":
-                                        existente["conta_dominio"] = c_limpa
-                                    else:
-                                        existente["conta"] = c_limpa
-
-                                mapa_contas[cod] = existente
-
-                                salvar_banco_dados_github(mapa_contas, caminho_arquivo_bd)
-                                st.session_state["excel_codigos_ausentes"].remove(cod)
-                                st.success(f"Conta para o código {cod} salva com sucesso!")
-                                st.rerun()
-                        st.divider()
-
+                    st.warning(
+                        f"⚠️ Existem códigos de serviço sem conta de {'RECEITA' if eh_receita else 'DESPESA'} {nome_modo} cadastrada. "
+                        "Confira a tabela acima e clique em **💾 Salvar contas** para liberar a prévia e os downloads."
+                    )
                 else:
                     st.error(f"⚠️️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
 
