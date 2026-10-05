@@ -419,6 +419,17 @@ def extrair_xml(caminho_ou_conteudo):
         or get_text(root, "Cnpj")
     )
 
+    toma_node = (
+        find_tag(root, "toma")
+        or find_tag(root, "TomadorServico")
+        or find_tag(root, "Tomador")
+    )
+    nome_tomador = (
+        get_text(toma_node, "xNome") or get_text(toma_node, "RazaoSocial")
+        if toma_node is not None
+        else ""
+    )
+
     codigo_tributacao = get_text(root, "cTribNac") or get_text(root, "CodigoListaServico") or get_text(root, "ItemListaServico")
     tipo_servico = (
         get_text(root, "xTribNac")
@@ -479,6 +490,7 @@ def extrair_xml(caminho_ou_conteudo):
         "Data Competência": data_competencia,
         "CNPJ Prestador": limpar_cnpj(cnpj_prestador),
         "Nome da Empresa": nome_empresa,
+        "Nome do Tomador": nome_tomador,
         "Código Tributação": codigo_tributacao,
         "Tipo de Serviço": tipo_servico,
         "Valor do Serviço": v_serv,
@@ -852,6 +864,18 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                             mapa_tipo_servico_xml[cod] = tipo
                 st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
 
+                # Empresa de exemplo por código: despesa -> prestador (fornecedor);
+                # receita -> tomador (cliente), pois o prestador é a própria empresa.
+                mapa_empresa_exemplo = {}
+                if not df_nfse.empty:
+                    col_nome = "Nome do Tomador" if eh_receita else "Nome da Empresa"
+                    for _, row in df_nfse.iterrows():
+                        cod = str(row.get("Código Tributação", "") or "").strip()
+                        nome = str(row.get(col_nome, "") or "").strip()
+                        if cod and nome and cod not in mapa_empresa_exemplo:
+                            mapa_empresa_exemplo[cod] = nome
+                st.session_state["mapa_empresa_exemplo"] = mapa_empresa_exemplo
+
                 if not df_nfse.empty:
                     codigos_na_nf = set(df_nfse["Código Tributação"].dropna().unique())
                     ausentes = [
@@ -872,6 +896,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
         eventos_list = st.session_state.get("eventos_list", [])
         ausentes = st.session_state.get("codigos_ausentes", [])
         mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
+        mapa_empresa_exemplo = st.session_state.get("mapa_empresa_exemplo", {})
         zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
         eh_receita = st.session_state.get("eh_receita_lote", False)
 
@@ -879,6 +904,36 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
             st.success("💰 **TIPO DE OPERAÇÃO IDENTIFICADA: RECEITA (SERVIÇOS PRESTADOS)**\n\nO CNPJ da empresa é o mesmo do prestador nas notas.")
         else:
             st.info("🛒 **TIPO DE OPERAÇÃO IDENTIFICADA: DESPESA (SERVIÇOS TOMADOS)**\n\nO CNPJ da empresa é diferente do prestador nas notas.")
+
+        # ------------------------------------------------------------
+        # CÓDIGOS DO LOTE + EMPRESA DE EXEMPLO (sempre visível, para
+        # ajudar a classificar cada código de tributação)
+        # ------------------------------------------------------------
+        if not df.empty and "Código Tributação" in df.columns:
+            chave_conta = (
+                ("conta_dominio_rec" if eh_receita else "conta_dominio")
+                if modo == "dominio"
+                else ("conta_rec" if eh_receita else "conta")
+            )
+            rotulo_empresa = "Cliente de exemplo" if eh_receita else "Empresa de exemplo"
+            linhas_codigos = []
+            for cod, grupo in df.groupby(df["Código Tributação"].astype(str).str.strip()):
+                if not cod:
+                    continue
+                desc_cod = (
+                    mapa_contas.get(cod, {}).get("descricao")
+                    or mapa_tipo_servico_xml.get(cod, "")
+                )
+                linhas_codigos.append({
+                    "Código": cod,
+                    "Serviço": desc_cod,
+                    rotulo_empresa: mapa_empresa_exemplo.get(cod, ""),
+                    "Qtd. notas": len(grupo),
+                    f"Conta {nome_modo}": mapa_contas.get(cod, {}).get(chave_conta, "") or "— não cadastrada —",
+                })
+            if linhas_codigos:
+                with st.expander("📋 Códigos de tributação deste lote (com empresa de exemplo)", expanded=True):
+                    st.dataframe(pd.DataFrame(linhas_codigos), use_container_width=True, hide_index=True)
 
         if ausentes:
             if eh_dono:
@@ -892,7 +947,12 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                     
                     with st.form(key=f"form_single_xml_{modo}_{cod}"):
                         st.markdown(f"#### 📌 Código: `{cod}`")
-                        st.info(f"📄 **Descrição:** {cod} - {desc_salvar}")
+                        empresa_ex = mapa_empresa_exemplo.get(cod, "")
+                        rotulo_ex = "Cliente de exemplo" if eh_receita else "Empresa de exemplo"
+                        texto_info = f"📄 **Descrição:** {cod} - {desc_salvar}"
+                        if empresa_ex:
+                            texto_info += f"\n\n🏢 **{rotulo_ex}:** {empresa_ex}"
+                        st.info(texto_info)
 
                         label_campo = f"Informe a conta Crédito (RECEITA) {nome_modo}:" if eh_receita else f"Informe a conta Débito (DESPESA) {nome_modo}:"
                         nova_conta = st.text_input(
@@ -959,7 +1019,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
             buffer_excel = io.BytesIO()
             with pd.ExcelWriter(buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy") as writer:
                 df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
-                df.to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+                df.drop(columns=["Nome do Tomador"], errors="ignore").to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
                 if not df_substituidas.empty:
                     df_substituidas.to_excel(writer, index=False, sheet_name="Notas Canceladas")
 
