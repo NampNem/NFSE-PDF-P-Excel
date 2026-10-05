@@ -61,7 +61,7 @@ def selecionar_plano_de_contas():
     )
 
     user_id = st.session_state["usuario_logado"]
-    
+
     if "empresas_planos" not in st.session_state or not st.session_state["empresas_planos"]:
         st.session_state["empresas_planos"] = carregar_empresas_github()
 
@@ -87,7 +87,7 @@ def selecionar_plano_de_contas():
             cod_emp = st.text_input("Código da Empresa:")
             cnpj_emp = st.text_input("CNPJ da Empresa:")
             nome_emp = st.text_input("Nome da Empresa:")
-            
+
             if st.button("Criar Plano de Contas", type="primary"):
                 if cod_emp and cnpj_emp and nome_emp:
                     st.session_state["empresas_planos"][cod_emp] = {
@@ -96,7 +96,7 @@ def selecionar_plano_de_contas():
                         "criador": user_id
                     }
                     salvar_empresas_github(st.session_state["empresas_planos"])
-                    
+
                     caminho_arq = obter_caminho_relativo_bd(empresa_id=cod_emp)
                     salvar_banco_dados_github({}, caminho_arq)
                     st.success(f"Plano de Contas criado em `{caminho_arq}`!")
@@ -132,107 +132,140 @@ def selecionar_plano_de_contas():
 
 
 # ============================================================
+# FUNÇÕES AUXILIARES DA TABELA EDITÁVEL DO PLANO DE CONTAS
+# ============================================================
+COLUNAS_PLANO = [
+    "Código Serviço",
+    "Descrição",
+    "Alterdata (Despesa)",
+    "Domínio (Despesa)",
+    "Alterdata (Receita)",
+    "Domínio (Receita)",
+]
+CHAVES_PLANO = ["conta", "conta_dominio", "conta_rec", "conta_dominio_rec"]
+
+
+def _txt(v):
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(v).strip()
+
+
+def mapa_para_df(mapa):
+    linhas = []
+    for cod, d in mapa.items():
+        linhas.append([cod, d.get("descricao", "")] + [d.get(k, "") for k in CHAVES_PLANO])
+    return pd.DataFrame(linhas, columns=COLUNAS_PLANO).astype(str)
+
+
+def df_para_mapa(df):
+    """Converte a tabela editada de volta para o dicionário. Retorna (mapa, erros)."""
+    from sieg_xml import limpar_conta
+
+    novo, erros, vistos = {}, [], set()
+    for i, r in df.iterrows():
+        cod = _txt(r["Código Serviço"])
+        desc = _txt(r["Descrição"])
+        contas = [limpar_conta(r[c]) for c in COLUNAS_PLANO[2:]]
+
+        if not cod and not desc and not any(contas):
+            continue  # linha totalmente vazia: ignora
+        if not cod:
+            erros.append(f"Linha {i + 1}: informe o Código Serviço.")
+            continue
+        if cod in vistos:
+            erros.append(f"Código `{cod}` está repetido na tabela.")
+            continue
+        vistos.add(cod)
+        novo[cod] = {"descricao": desc, **dict(zip(CHAVES_PLANO, contas))}
+    return novo, erros
+
+
+# ============================================================
 # TELA DEDICADA: ALTERAR PLANO DE CONTAS
 # ============================================================
 def pagina_alterar_plano_de_contas():
     from sieg_xml import (
-        carregar_banco_dados_github,
         salvar_banco_dados_github,
-        deletar_conta_do_banco,
         deletar_empresa_completa_github,
     )
 
     st.title("📝 Alterar Plano de Contas")
-    
+
     mapa_contas, caminho_arquivo_ativo, eh_dono = selecionar_plano_de_contas()
     cod_emp_ativo = st.session_state.get("empresa_ativa_cod")
     st.markdown("---")
 
-    if caminho_arquivo_ativo and cod_emp_ativo:
-        if eh_dono:
-            col_tit, col_del_emp = st.columns([3, 1])
-            with col_del_emp:
-                with st.popover("🗑️ Apagar Empresa / Plano", use_container_width=True):
-                    st.warning("⚠️️ Esta ação vai apagar permanentemente esta empresa e o plano de contas dela!")
-                    st.write(f"Empresa Código: **{cod_emp_ativo}**")
-                    if st.button("Confirmar Exclusão Definitiva", type="primary", key="btn_confirm_del_emp"):
-                        if deletar_empresa_completa_github(cod_emp_ativo, st.session_state["empresas_planos"]):
-                            st.success("Empresa e Plano de Contas apagados com sucesso!")
-                            st.session_state["empresas_planos"] = {}
-                            st.rerun()
+    if st.session_state.pop("plano_salvo_ok", False):
+        st.success("Plano de contas salvo com sucesso!")
 
-            if mapa_contas:
-                st.subheader("⚙️ Gerenciar / Alterar Contas Existentes")
-                cod_sel_editar = st.selectbox("Selecione o Código do Serviço para alterar:", list(mapa_contas.keys()))
-                
-                if cod_sel_editar:
-                    dados_atuais = mapa_contas[cod_sel_editar]
-                    st.write(f"**Serviço:** {dados_atuais.get('descricao', 'Sem Descrição')}")
-                    
-                    st.markdown("##### 🛒 Contas de DESPESA (Tomador)")
-                    c_alt_desp, c_dom_desp = st.columns(2)
-                    with c_alt_desp:
-                        nova_cnt_alt = st.text_input("Conta Alterdata (Despesa):", value=str(dados_atuais.get("conta", "")), key=f"edit_alt_{cod_sel_editar}")
-                    with c_dom_desp:
-                        nova_cnt_dom = st.text_input("Conta Domínio (Despesa):", value=str(dados_atuais.get("conta_dominio", "")), key=f"edit_dom_{cod_sel_editar}")
+    if not (caminho_arquivo_ativo and cod_emp_ativo):
+        return
 
-                    st.markdown("##### 💰 Contas de RECEITA (Prestador)")
-                    c_alt_rec, c_dom_rec = st.columns(2)
-                    with c_alt_rec:
-                        nova_cnt_alt_rec = st.text_input("Conta Alterdata (Receita):", value=str(dados_atuais.get("conta_rec", "")), key=f"edit_alt_rec_{cod_sel_editar}")
-                    with c_dom_rec:
-                        nova_cnt_dom_rec = st.text_input("Conta Domínio (Receita):", value=str(dados_atuais.get("conta_dominio_rec", "")), key=f"edit_dom_rec_{cod_sel_editar}")
+    # ---------------- SOMENTE LEITURA ----------------
+    if not eh_dono:
+        st.error("⚠️ Você não tem permissão para alterar ou apagar esta empresa. Apenas o criador (dono) do plano tem essa autorização.")
+        if mapa_contas:
+            st.subheader("📊 Visualização das Contas (Modo Leitura)")
+            st.dataframe(mapa_para_df(mapa_contas), use_container_width=True, hide_index=True)
+        return
 
-                    st.write("")
-                    col_salv, col_del = st.columns(2)
-                    with col_salv:
-                        if st.button("💾 Salvar Alterações", key=f"btn_save_{cod_sel_editar}", type="primary"):
-                            mapa_contas[cod_sel_editar]["conta"] = nova_cnt_alt.strip()
-                            mapa_contas[cod_sel_editar]["conta_dominio"] = nova_cnt_dom.strip()
-                            mapa_contas[cod_sel_editar]["conta_rec"] = nova_cnt_alt_rec.strip()
-                            mapa_contas[cod_sel_editar]["conta_dominio_rec"] = nova_cnt_dom_rec.strip()
-                            salvar_banco_dados_github(mapa_contas, caminho_arquivo_ativo)
-                            st.success("Contas atualizadas no GitHub!")
-                            st.rerun()
-                    with col_del:
-                        if st.button("❌ Apagar Código", key=f"btn_del_{cod_sel_editar}"):
-                            if deletar_conta_do_banco(mapa_contas, cod_sel_editar, caminho_arquivo_ativo):
-                                st.success(f"Código {cod_sel_editar} apagado com sucesso!")
-                                st.rerun()
+    # ---------------- DONO: TABELA EDITÁVEL ----------------
+    col_tit, col_del_emp = st.columns([3, 1])
+    with col_del_emp:
+        with st.popover("🗑️ Apagar Empresa / Plano", use_container_width=True):
+            st.warning("⚠️️ Esta ação vai apagar permanentemente esta empresa e o plano de contas dela!")
+            st.write(f"Empresa Código: **{cod_emp_ativo}**")
+            if st.button("Confirmar Exclusão Definitiva", type="primary", key="btn_confirm_del_emp"):
+                if deletar_empresa_completa_github(cod_emp_ativo, st.session_state["empresas_planos"]):
+                    st.success("Empresa e Plano de Contas apagados com sucesso!")
+                    st.session_state["empresas_planos"] = {}
+                    st.rerun()
 
-                st.markdown("---")
-                st.subheader("📊 Tabela Completa das Contas Cadastradas")
-                
-                linhas_tbl = []
-                for cod_item, d_item in mapa_contas.items():
-                    linhas_tbl.append({
-                        "Código Serviço": cod_item,
-                        "Descrição": d_item.get("descricao", ""),
-                        "Alterdata (Despesa)": d_item.get("conta", ""),
-                        "Domínio (Despesa)": d_item.get("conta_dominio", ""),
-                        "Alterdata (Receita)": d_item.get("conta_rec", ""),
-                        "Domínio (Receita)": d_item.get("conta_dominio_rec", ""),
-                    })
-                st.dataframe(pd.DataFrame(linhas_tbl), use_container_width=True)
-            else:
-                st.info("Este Plano de Contas está em branco no momento. Ele será preenchido automaticamente ao processar notas.")
+    with col_tit:
+        st.subheader("⚙️ Plano de Contas")
+        st.caption(
+            "Edite direto nas células. Para **cadastrar**, use a última linha em branco (＋). "
+            "Para **apagar**, marque a caixinha à esquerda da linha e clique na lixeira (ou tecla Delete). "
+            "Nada é gravado até clicar em **Salvar alterações**."
+        )
 
+    df_original = mapa_para_df(mapa_contas or {})
+
+    # A versão na key reinicia o editor depois de salvar (evita reaplicar edições antigas)
+    versao = st.session_state.get("ver_editor_plano", 0)
+
+    df_editado = st.data_editor(
+        df_original,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key=f"editor_plano_{cod_emp_ativo}_{versao}",
+        column_config={
+            "Código Serviço": st.column_config.TextColumn("Código Serviço", required=True),
+            "Descrição": st.column_config.TextColumn("Descrição", width="large"),
+            "Alterdata (Despesa)": st.column_config.TextColumn("Alterdata (Despesa)"),
+            "Domínio (Despesa)": st.column_config.TextColumn("Domínio (Despesa)"),
+            "Alterdata (Receita)": st.column_config.TextColumn("Alterdata (Receita)"),
+            "Domínio (Receita)": st.column_config.TextColumn("Domínio (Receita)"),
+        },
+    )
+
+    if st.button("💾 Salvar alterações", type="primary", key="btn_salvar_plano"):
+        novo_mapa, erros = df_para_mapa(df_editado)
+        if erros:
+            for e in erros:
+                st.error(e)
         else:
-            st.error("⚠️ Você não tem permissão para alterar ou apagar esta empresa. Apenas o criador (dono) do plano tem essa autorização.")
-            
-            if mapa_contas:
-                st.subheader("📊 Visualização das Contas (Modo Leitura)")
-                linhas_tbl = []
-                for cod_item, d_item in mapa_contas.items():
-                    linhas_tbl.append({
-                        "Código Serviço": cod_item,
-                        "Descrição": d_item.get("descricao", ""),
-                        "Alterdata (Despesa)": d_item.get("conta", ""),
-                        "Domínio (Despesa)": d_item.get("conta_dominio", ""),
-                        "Alterdata (Receita)": d_item.get("conta_rec", ""),
-                        "Domínio (Receita)": d_item.get("conta_dominio_rec", ""),
-                    })
-                st.dataframe(pd.DataFrame(linhas_tbl), use_container_width=True)
+            salvar_banco_dados_github(novo_mapa, caminho_arquivo_ativo)
+            st.session_state["ver_editor_plano"] = versao + 1
+            st.session_state["plano_salvo_ok"] = True
+            st.rerun()
 
 
 # ============================================================
@@ -294,7 +327,7 @@ if pagina_atual == "sieg":
 # ------------------------------------------------------------
 elif pagina_atual == "excel_nfse":
     from sieg_xml import (
-        formatar_valor, 
+        formatar_valor,
         salvar_banco_dados_github,
         gerar_aba_alterdata,
         gerar_txt_dominio,
@@ -326,10 +359,10 @@ elif pagina_atual == "excel_nfse":
 
                 with st.spinner("Processando dados e aplicando regras V2..."):
                     registros, ignoradas = extrair_nfse_excel(arquivo_excel, formatar_valor)
-                    
+
                     df_nfse = pd.DataFrame(registros)
                     mapa_descricoes = {}
-                    
+
                     # DETERMINA RECEITA x DESPESA
                     cnpj_emp_sel = limpar_cnpj(st.session_state.get("empresa_ativa_cnpj", ""))
                     cnpjs_prest_lote = set(df_nfse["CNPJ Prestador"].dropna().apply(limpar_cnpj).unique()) if not df_nfse.empty and "CNPJ Prestador" in df_nfse.columns else set()
@@ -383,7 +416,7 @@ elif pagina_atual == "excel_nfse":
 
                     for cod in list(ausentes):
                         descr = mapa_descricoes.get(cod, "Descrição do Serviço")
-                        
+
                         with st.form(key=f"form_single_v2_{modo}_{cod}"):
                             st.markdown(f"#### 📌 Código: `{cod}`")
                             texto_info = f"📄 **Serviço Prestado:** {cod} - {descr}"
@@ -404,7 +437,7 @@ elif pagina_atual == "excel_nfse":
                                 c_limpa = conta_in.strip() or conta_padrao
                                 existente = mapa_contas.get(cod, {"descricao": descr, "conta": "", "conta_dominio": "", "conta_rec": "", "conta_dominio_rec": ""})
                                 existente["descricao"] = existente.get("descricao") or descr
-                                
+
                                 if eh_receita:
                                     if modo == "dominio":
                                         existente["conta_dominio_rec"] = c_limpa
@@ -431,7 +464,7 @@ elif pagina_atual == "excel_nfse":
                 st.subheader(f"🧾 Contas dos Impostos e Contrapartida - {nome_modo}")
                 padrao = CONTAS[modo]
                 rotulo_principal = "Clientes (Débito)" if eh_receita else "Fornecedores (Crédito)"
-                
+
                 campos_contas = [
                     ("credito_principal", rotulo_principal),
                     ("pcc", "PIS / COFINS / CSLL"),
