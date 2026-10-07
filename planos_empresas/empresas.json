@@ -1,27 +1,7 @@
 {
-    "272": {
-        "nome": "POSTO KEM",
-        "cnpj": "05405414000114",
-        "criador": "124"
-    },
-    "00977": {
-        "nome": "APULIA POSTO DE GASOLINA LTDA ",
-        "cnpj": "30352496000123",
-        "criador": "125"
-    },
-    "00847": {
-        "nome": "ACQUATUR SERVICOS DE TURISMOS",
-        "cnpj": "42190470000105",
-        "criador": "107"
-    },
-    "10916": {
-        "nome": "AUTO POSTO REDE PARCEIRO ANIL LTDA",
-        "cnpj": "30865289000172",
-        "criador": "125"
-    },
-    "00995": {
-        "nome": "V E T INVESTIMENTOS E PARTICIPAÇÕES S/A",
-        "cnpj": "30878924000156",
+    "00272": {
+        "nome": "POSTO DE GASOLINA KEM",
+        "cnpj": "40296824000175",
         "criador": "124"
     }
 }
