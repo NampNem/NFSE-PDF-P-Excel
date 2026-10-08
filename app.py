@@ -74,7 +74,7 @@ def selecionar_plano_de_contas():
         opcoes_emp = []
         for cod, d in empresas.items():
             cnpj_str = f" | CNPJ: {limpar_cnpj(d.get('cnpj', 'N/I'))}" if d.get('cnpj') else ""
-            criador_str = USUARIOS_PERMITIDOS.get(d.get('criador'), 'Desconhecido')
+            criador_str = USUARIOS_PERMITIDOS.get(d.get('criador'), 'Sem cadastro' if d.get('auto') else 'Desconhecido')
             opcoes_emp.append(f"{cod} - {d['nome']}{cnpj_str} (Criador: {criador_str})")
 
         opcoes_emp.insert(0, "Selecione uma Empresa...")
