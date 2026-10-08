@@ -62,8 +62,8 @@ def selecionar_plano_de_contas():
 
     user_id = st.session_state["usuario_logado"]
 
-    if "empresas_planos" not in st.session_state or not st.session_state["empresas_planos"]:
-        st.session_state["empresas_planos"] = carregar_empresas_github()
+    # Sempre recarrega: junta GitHub + JSON local + planos que existem na pasta
+    st.session_state["empresas_planos"] = carregar_empresas_github()
 
     st.subheader("🏢 Seleção do Plano de Contas da Empresa")
 
