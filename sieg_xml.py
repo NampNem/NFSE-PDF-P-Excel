@@ -661,7 +661,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
                 soma_pcc += val_csll
 
             if soma_pcc > 0:
-                desc_pcc = f"Retenção PCC s/ NF {num_nota} - {nome_empresa}"
+                desc_pcc = f"Retenção PIS/COFINS/CSLL s/ NF {num_nota} - {nome_empresa}"
                 linhas_alterdata.append({
                     "Data": data_comp,
                     "debito": "",
