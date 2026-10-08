@@ -197,37 +197,97 @@ def obter_caminho_relativo_bd(empresa_id):
     return os.path.join(PASTA_BANCOS, f"plano_empresa_{empresa_id}.xlsx")
 
 
-def carregar_empresas_github():
-    garantir_pasta_local()
-    if os.path.exists(ARQUIVO_EMPRESAS_JSON):
-        try:
-            with open(ARQUIVO_EMPRESAS_JSON, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-
-def salvar_empresas_github(empresas_dict):
-    garantir_pasta_local()
-    with open(ARQUIVO_EMPRESAS_JSON, "w", encoding="utf-8") as f:
-        json.dump(empresas_dict, f, ensure_ascii=False, indent=4)
-
+def _repo_github():
     try:
         token = st.secrets.get("GITHUB_TOKEN")
         repo_name = st.secrets.get("REPO_NAME")
         if token and repo_name:
-            g = Github(token)
-            repo = g.get_repo(repo_name)
-            content = json.dumps(empresas_dict, ensure_ascii=False, indent=4)
+            return Github(token).get_repo(repo_name)
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _ler_empresas_remoto():
+    """Lê o empresas.json direto do GitHub (cache de 60s para não estourar a API)."""
+    repo = _repo_github()
+    if not repo:
+        return {}
+    try:
+        c = repo.get_contents(ARQUIVO_EMPRESAS_JSON.replace("\\", "/"))
+        return json.loads(c.decoded_content.decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def listar_planos_em_disco():
+    """Acha todos os plano_empresa_XXXX.xlsx (na pasta planos_empresas e na raiz)."""
+    achados = {}
+    for pasta in (PASTA_BANCOS, "."):
+        if os.path.isdir(pasta):
+            for nome in os.listdir(pasta):
+                m = re.match(r"^plano_empresa_(.+)\.xlsx$", nome)
+                if m and m.group(1) not in achados:
+                    achados[m.group(1)] = os.path.join(pasta, nome)
+    return achados
+
+
+def carregar_empresas_github():
+    garantir_pasta_local()
+    empresas = {}
+
+    # 1) JSON remoto (GitHub) e depois o local (local tem prioridade)
+    empresas.update(_ler_empresas_remoto())
+    if os.path.exists(ARQUIVO_EMPRESAS_JSON):
+        try:
+            with open(ARQUIVO_EMPRESAS_JSON, "r", encoding="utf-8") as f:
+                empresas.update(json.load(f))
+        except Exception:
+            pass
+
+    # 2) Todo plano que existe na pasta mas não está no JSON entra na lista
+    for cod in listar_planos_em_disco():
+        if cod not in empresas:
+            empresas[cod] = {
+                "nome": f"Empresa {cod} (sem cadastro)",
+                "cnpj": "",
+                "criador": "",
+                "auto": True,   # marcador: não é gravado no JSON
+            }
+    return empresas
+
+
+def salvar_empresas_github(empresas_dict, mesclar=True):
+    garantir_pasta_local()
+
+    # Remove os itens "automáticos" (só existem em memória)
+    final = {k: v for k, v in empresas_dict.items() if not v.get("auto")}
+
+    # Mescla com o que já está no GitHub para não apagar empresas de outros usuários
+    if mesclar:
+        _ler_empresas_remoto.clear()
+        remoto = _ler_empresas_remoto()
+        remoto.update(final)
+        final = remoto
+
+    conteudo = json.dumps(final, ensure_ascii=False, indent=4)
+    with open(ARQUIVO_EMPRESAS_JSON, "w", encoding="utf-8") as f:
+        f.write(conteudo)
+
+    try:
+        repo = _repo_github()
+        if repo:
             caminho_repo = ARQUIVO_EMPRESAS_JSON.replace("\\", "/")
             try:
-                contents = repo.get_contents(caminho_repo)
-                repo.update_file(contents.path, "Atualizando lista de empresas", content, contents.sha)
+                c = repo.get_contents(caminho_repo)
+                repo.update_file(c.path, "Atualizando lista de empresas", conteudo, c.sha)
             except Exception:
-                repo.create_file(caminho_repo, "Criando lista de empresas", content)
+                repo.create_file(caminho_repo, "Criando lista de empresas", conteudo)
     except Exception as e:
         st.error(f"Erro ao salvar empresas.json no GitHub: {e}")
+    finally:
+        _ler_empresas_remoto.clear()
 
 
 def deletar_empresa_completa_github(cod_empresa, empresas_dict):
@@ -236,7 +296,7 @@ def deletar_empresa_completa_github(cod_empresa, empresas_dict):
 
     if cod_empresa in empresas_dict:
         del empresas_dict[cod_empresa]
-        salvar_empresas_github(empresas_dict)
+        salvar_empresas_github(empresas_dict, mesclar=False)
 
     if os.path.exists(caminho_local):
         os.remove(caminho_local)
@@ -274,6 +334,22 @@ def eh_proprietario_do_banco(nome_arquivo, usuario_logado, empresas_planos=None)
 def carregar_banco_dados_github(caminho_arquivo):
     garantir_pasta_local()
     mapa = {}
+
+    if not os.path.exists(caminho_arquivo):
+        # tenta na raiz (caso o arquivo tenha sido enviado fora da pasta)
+        alternativo = os.path.basename(caminho_arquivo)
+        if os.path.exists(alternativo):
+            caminho_arquivo = alternativo
+        else:
+            repo = _repo_github()
+            if repo:
+                try:
+                    c = repo.get_contents(caminho_arquivo.replace("\\", "/"))
+                    with open(caminho_arquivo, "wb") as f:
+                        f.write(c.decoded_content)
+                except Exception:
+                    pass
+
     if os.path.exists(caminho_arquivo):
         try:
             df_bd = pd.read_excel(caminho_arquivo, header=None)
