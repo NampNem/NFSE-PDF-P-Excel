@@ -239,12 +239,13 @@ def carregar_empresas_github():
 
     # 1) JSON remoto (GitHub) e depois o local (local tem prioridade)
     empresas.update(_ler_empresas_remoto())
-    if os.path.exists(ARQUIVO_EMPRESAS_JSON):
-        try:
-            with open(ARQUIVO_EMPRESAS_JSON, "r", encoding="utf-8") as f:
-                empresas.update(json.load(f))
-        except Exception:
-            pass
+    for caminho_json in (ARQUIVO_EMPRESAS_JSON, "empresas.json"):
+        if os.path.exists(caminho_json):
+            try:
+                with open(caminho_json, "r", encoding="utf-8") as f:
+                    empresas.update(json.load(f))
+            except Exception:
+                pass
 
     # 2) Todo plano que existe na pasta mas não está no JSON entra na lista
     for cod in listar_planos_em_disco():
