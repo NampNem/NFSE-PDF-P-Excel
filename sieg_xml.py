@@ -21,6 +21,9 @@ CONTAS = {
         "credito_principal": "708",     # Fornecedores (Despesa) ou Clientes (Receita)
         "credito_receita": "3001",      # Receita de Serviços
         "pcc": "236",
+        "pis": "236",      # Prestados: ajuste para a conta de PIS a recuperar/compensar
+        "cofins": "236",   # Prestados: ajuste para a conta de COFINS
+        "csll": "236",     # Prestados: ajuste para a conta de CSLL
         "irrf": "763",
         "inss": "834",
         "iss": "3332",
@@ -31,6 +34,9 @@ CONTAS = {
         "credito_principal": "3907",    # Fornecedores (Despesa) ou Clientes (Receita)
         "credito_receita": "5001",      # Receita de Serviços
         "pcc": "647",
+        "pis": "647",
+        "cofins": "647",
+        "csll": "647",
         "irrf": "178",
         "inss": "184",
         "iss": "183",
@@ -617,6 +623,9 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
             conta_cred = contas["credito_principal"]
 
         # Descrição / complemento do histórico: "NF 00000 - NOME DO PRESTADOR"
+        if eh_receita:
+            nome_tomador = str(row.get("Nome do Tomador", "") or "").strip()
+            nome_empresa = nome_tomador or nome_empresa   # em receita, o "outro lado" é o cliente
         desc_padrao = f"NF {num_nota} - {nome_empresa}".strip()
 
         val_bruto = converter_valor(row.get("Valor do Serviço")) or 0.0
@@ -630,6 +639,44 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
         val_iss = converter_valor(row.get("ISS Retenção")) or 0.0
 
         soma_retencoes = val_pis + val_cofins + val_csll + val_irrf + val_inss + val_iss
+
+        # ---------------- PRESTADO (RECEITA) COM RETENÇÕES ----------------
+        # Débito: Cliente (líquido) + cada retenção na sua conta | Crédito: Receita (bruto)
+        if eh_receita and soma_retencoes > 0:
+            def _data():
+                return data_comp
+
+            linhas_alterdata.append({
+                "Data": data_comp, "debito": conta_deb, "credito": "",
+                "valor": val_liquido, "documento": num_nota,
+                "historico": historico, "descrição": desc_padrao,
+            })
+
+            retencoes = [
+                ("PIS", "PIS Retido?", val_pis, "pis"),
+                ("COFINS", "COFINS Retido?", val_cofins, "cofins"),
+                ("CSLL", "CSLL Retida?", val_csll, "csll"),
+                ("IRRF", "IRRF Retido?", val_irrf, "irrf"),
+                ("INSS", "INSS Retido?", val_inss, "inss"),
+                ("ISS", "ISS Retido?", val_iss, "iss"),
+            ]
+            for nome_imp, col_flag, valor_imp, chave_conta in retencoes:
+                if valor_imp > 0 and str(row.get(col_flag, "")).strip().upper() == "COM RETENÇÃO":
+                    linhas_alterdata.append({
+                        "Data": data_comp,
+                        "debito": contas.get(chave_conta) or contas["pcc"],
+                        "credito": "",
+                        "valor": valor_imp, "documento": num_nota,
+                        "historico": historico,
+                        "descrição": f"Retenção {nome_imp} s/ NF {num_nota} - {nome_empresa}",
+                    })
+
+            linhas_alterdata.append({
+                "Data": data_comp, "debito": "", "credito": conta_cred,
+                "valor": val_bruto, "documento": num_nota,
+                "historico": historico, "descrição": desc_padrao,
+            })
+            continue
 
         if soma_retencoes == 0.0:
             linhas_alterdata.append({
@@ -729,6 +776,7 @@ def gerar_txt_dominio(df_dominio, lote_inicial=1):
 
     linhas = []
     lote = int(lote_inicial) - 1
+    anterior_so_debito = False
 
     for _, r in df_dominio.iterrows():
         deb = limpo(r.get("debito"))
@@ -742,11 +790,14 @@ def gerar_txt_dominio(df_dominio, lote_inicial=1):
 
         hist = limpo(r.get("descrição")).replace(";", " ")
 
-        if deb:
+        # Novo lote quando há débito e a linha anterior NÃO era um débito "aberto"
+        # (no prestado, vários débitos seguidos + 1 crédito formam um único lote)
+        if deb and not anterior_so_debito:
             lote += 1
             lote_txt = str(lote)
         else:
             lote_txt = ""
+        anterior_so_debito = bool(deb and not cred)
 
         linhas.append(f"{data_txt};{deb};{cred};{valor_txt};{hist};{lote_txt};;;")
 
@@ -970,8 +1021,46 @@ def editor_codigos_lote(df, mapa_contas, caminho_arquivo_bd, modo, eh_receita, e
 # ============================================================
 # PÁGINA STREAMLIT SIEG XML
 # ============================================================
-def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
-    st.title("📄 SIEG XML PARA Importação")
+def desenhar_campos_contas(modo, eh_receita, prefixo_key):
+    """Campos editáveis das contas. Prestados mostra PIS, COFINS e CSLL separados."""
+    padrao = CONTAS[modo]
+    if eh_receita:
+        campos = [
+            ("credito_principal", "Clientes (Débito)"),
+            ("pis", "PIS (Débito)"),
+            ("cofins", "COFINS (Débito)"),
+            ("csll", "CSLL (Débito)"),
+            ("irrf", "IRRF (Débito)"),
+            ("inss", "INSS (Débito)"),
+            ("iss", "ISS (Débito)"),
+            ("historico", "Histórico Padrão"),
+        ]
+    else:
+        campos = [
+            ("credito_principal", "Fornecedores (Crédito)"),
+            ("pcc", "PIS / COFINS / CSLL"),
+            ("irrf", "IRRF"),
+            ("inss", "INSS"),
+            ("iss", "ISS"),
+            ("historico", "Histórico Padrão"),
+        ]
+    contas_editadas = dict(padrao)
+    for ini in range(0, len(campos), 4):
+        cols = st.columns(4)
+        for col, (chave, rotulo) in zip(cols, campos[ini:ini + 4]):
+            with col:
+                v = st.text_input(rotulo, value=padrao.get(chave, ""),
+                                  key=f"{prefixo_key}_{modo}_{int(eh_receita)}_{chave}")
+                contas_editadas[chave] = v.strip() or padrao.get(chave, "")
+    return contas_editadas
+
+
+def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True, eh_receita=False):
+    tipo = "prestados" if eh_receita else "tomados"
+    if eh_receita:
+        st.title("📤 SIEG XML - Serviços PRESTADOS (Receita)")
+    else:
+        st.title("📥 SIEG XML - Serviços TOMADOS (Despesa)")
     st.write("Faça o upload dos arquivos **XML**, **PDF** ou **ZIP**.")
 
     if mapa_contas is None and caminho_arquivo_bd:
@@ -981,9 +1070,16 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
         "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
         type=["xml", "pdf", "zip"],
         accept_multiple_files=True,
+        key=f"upload_sieg_{tipo}",
     )
 
     if uploaded_files:
+        filtrar_cnpj = st.checkbox(
+            "Filtrar automaticamente pelo CNPJ da empresa selecionada "
+            + ("(manter só notas em que ela é a PRESTADORA)" if eh_receita
+               else "(descartar notas em que ela é a prestadora)"),
+            value=True, key=f"filtro_cnpj_{tipo}",
+        )
         col_btn1, col_btn2, _ = st.columns([1, 1, 2])
         with col_btn1:
             processar_alterdata = st.button("🚀 Processar para Alterdata")
@@ -1062,15 +1158,17 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
                 status_text.text("Extração concluída!")
 
                 df_nfse = pd.DataFrame(registros_nfse)
+                cnpj_emp_sel = limpar_cnpj(st.session_state.get("empresa_ativa_cnpj", ""))
+                qtd_fora = 0
+                if filtrar_cnpj and cnpj_emp_sel and not df_nfse.empty and "CNPJ Prestador" in df_nfse.columns:
+                    prest = df_nfse["CNPJ Prestador"].fillna("").apply(limpar_cnpj)
+                    mascara = (prest == cnpj_emp_sel) if eh_receita else (prest != cnpj_emp_sel)
+                    qtd_fora = int((~mascara).sum())
+                    df_nfse = df_nfse[mascara].reset_index(drop=True)
+                st.session_state["qtd_fora_sieg"] = qtd_fora
                 st.session_state["df_extrato"] = df_nfse
                 st.session_state["eventos_list"] = registros_eventos
                 st.session_state["zip_pdf_bytes"] = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
-
-                # DETERMINA RECEITA x DESPESA
-                cnpj_emp_sel = limpar_cnpj(st.session_state.get("empresa_ativa_cnpj", ""))
-                cnpjs_prest_lote = set(df_nfse["CNPJ Prestador"].dropna().apply(limpar_cnpj).unique()) if not df_nfse.empty else set()
-                eh_receita = bool(cnpj_emp_sel and cnpj_emp_sel in cnpjs_prest_lote)
-                st.session_state["eh_receita_lote"] = eh_receita
 
                 mapa_tipo_servico_xml = {}
                 if not df_nfse.empty:
@@ -1090,19 +1188,24 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
         eventos_list = st.session_state.get("eventos_list", [])
         mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
         zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
-        eh_receita = st.session_state.get("eh_receita_lote", False)
-
         if eh_receita:
-            st.success("💰 **TIPO DE OPERAÇÃO IDENTIFICADA: RECEITA (SERVIÇOS PRESTADOS)**\n\nO CNPJ da empresa é o mesmo do prestador nas notas.")
+            st.success("💰 **TIPO DE OPERAÇÃO: RECEITA (SERVIÇOS PRESTADOS)**")
         else:
-            st.info("🛒 **TIPO DE OPERAÇÃO IDENTIFICADA: DESPESA (SERVIÇOS TOMADOS)**\n\nO CNPJ da empresa é diferente do prestador nas notas.")
+            st.info("🛒 **TIPO DE OPERAÇÃO: DESPESA (SERVIÇOS TOMADOS)**")
+
+        qtd_fora = st.session_state.get("qtd_fora_sieg", 0)
+        if qtd_fora:
+            st.warning(f"{qtd_fora} nota(s) do outro tipo (" + ("tomadas" if eh_receita else "prestadas") + ") foram descartadas pelo filtro de CNPJ.")
+        if df.empty:
+            st.error("Nenhuma nota deste tipo foi encontrada. Confira a empresa selecionada ou desmarque o filtro de CNPJ.")
+            return
 
         # ------------------------------------------------------------
         # TABELA EDITÁVEL DE CÓDIGOS DO LOTE (um único botão para salvar)
         # ------------------------------------------------------------
         ausentes = editor_codigos_lote(
             df, mapa_contas, caminho_arquivo_bd, modo, eh_receita, eh_dono,
-            mapa_descricoes=mapa_tipo_servico_xml, chave_estado="sieg",
+            mapa_descricoes=mapa_tipo_servico_xml, chave_estado=f"sieg_{tipo}",
         )
 
         if ausentes:
@@ -1118,24 +1221,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
             df_codigos_lote = tabela_codigos_lote(df, mapa_contas, modo, eh_receita, mapa_tipo_servico_xml)
 
             st.subheader(f"🧾 Contas dos Impostos e Conta Contrapartida - {nome_modo}")
-            padrao = CONTAS[modo]
-
-            rotulo_principal = "Clientes (Débito)" if eh_receita else "Fornecedores (Crédito)"
-            campos_contas = [
-                ("credito_principal", rotulo_principal),
-                ("pcc", "PIS / COFINS / CSLL"),
-                ("irrf", "IRRF"),
-                ("inss", "INSS"),
-                ("iss", "ISS"),
-                ("historico", "Histórico Padrão"),
-            ]
-
-            contas_editadas = dict(padrao)
-            colunas_contas = st.columns(len(campos_contas))
-            for coluna, (chave, rotulo) in zip(colunas_contas, campos_contas):
-                with coluna:
-                    v_dig = st.text_input(rotulo, value=padrao[chave], key=f"conta_sieg_{modo}_{chave}")
-                    contas_editadas[chave] = v_dig.strip() or padrao[chave]
+            contas_editadas = desenhar_campos_contas(modo, eh_receita, f"conta_sieg_{tipo}")
 
             df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo, contas_editadas, eh_receita=eh_receita)
             df_substituidas = gerar_aba_substituidas(eventos_list, df)
