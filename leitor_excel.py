@@ -138,7 +138,7 @@ def extrair_nfse_excel(origem, formatar_valor_fn):
             "tipo_xml": "NFSE",
             "Chave NFS-e": _texto(row.get("Chave NFS-e")),
             "Número da NFS-e": numero,
-            "Data Competência": _data_iso(row.get("Data Geração")),
+            "Data Competência": _data_iso(row.get("Competência") or row.get("Data Competência") or row.get("Data Geração")),
             "CNPJ Prestador": cnpj_formatado,
             "Nome da Empresa": nome_empresa,
             "Nome do Tomador": nome_tomador,
