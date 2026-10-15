@@ -280,22 +280,16 @@ def menu_principal():
     st.title("🗂️ Meus Sistemas")
     st.write("Escolha a opção que deseja acessar:")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("📥 SIEG XML - TOMADOS (Despesa)", use_container_width=True):
-            st.session_state["pagina"] = "sieg_tomados"
+        if st.button("📄 SIEG XML PARA Importação", use_container_width=True):
+            st.session_state["pagina"] = "sieg"
             st.rerun()
     with col2:
-        if st.button("📤 SIEG XML - PRESTADOS (Receita)", use_container_width=True):
-            st.session_state["pagina"] = "sieg_prestados"
-            st.rerun()
-
-    col3, col4 = st.columns(2)
-    with col3:
         if st.button("📊 Excel NFS-e (Portal Nacional)", use_container_width=True):
             st.session_state["pagina"] = "excel_nfse"
             st.rerun()
-    with col4:
+    with col3:
         if st.button("📝 Alterar Plano de Contas", use_container_width=True):
             st.session_state["pagina"] = "alterar_plano"
             st.rerun()
@@ -321,21 +315,12 @@ if pagina_atual != "menu":
 # ------------------------------------------------------------
 # OPÇÃO 1: SIEG XML
 # ------------------------------------------------------------
-if pagina_atual in ("sieg_tomados", "sieg_prestados"):
+if pagina_atual == "sieg":
     from sieg_xml import pagina_sieg_xml
-
-    # Ao trocar de tela (tomados <-> prestados), limpa o resultado anterior
-    if st.session_state.get("sieg_tipo_carregado") != pagina_atual:
-        for k in ("df_extrato", "eventos_list", "zip_pdf_bytes",
-                  "mapa_tipo_servico_xml", "modo", "qtd_fora_sieg"):
-            st.session_state.pop(k, None)
-        st.session_state["sieg_tipo_carregado"] = pagina_atual
-
     mapa_contas, caminho_arquivo_bd, eh_dono = selecionar_plano_de_contas()
     st.markdown("---")
     if mapa_contas is not None:
-        pagina_sieg_xml(mapa_contas, caminho_arquivo_bd, eh_dono,
-                        eh_receita=(pagina_atual == "sieg_prestados"))
+        pagina_sieg_xml(mapa_contas, caminho_arquivo_bd, eh_dono)
 
 # ------------------------------------------------------------
 # OPÇÃO 2: EXCEL NFSE
