@@ -1055,31 +1055,122 @@ def desenhar_campos_contas(modo, eh_receita, prefixo_key):
     return contas_editadas
 
 
-def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True, eh_receita=False):
-    tipo = "prestados" if eh_receita else "tomados"
-    if eh_receita:
-        st.title("📤 SIEG XML - Serviços PRESTADOS (Receita)")
+def _eventos_da_secao(eventos_list, df):
+    """Eventos (cancelamentos/substituições) cujas chaves pertencem às notas desta seção."""
+    if df is None or df.empty or "Chave NFS-e" not in df.columns:
+        return []
+    chaves = set(df["Chave NFS-e"].astype(str).str.strip())
+    return [
+        ev for ev in eventos_list
+        if str(ev.get("Chave NFS-e Original", "")).strip() in chaves
+        or str(ev.get("Chave NFS-e Substituta", "")).strip() in chaves
+    ]
+
+
+def _secao_sieg(df, eh_receita, tipo, modo, mapa_contas, caminho_arquivo_bd, eh_dono,
+                mapa_descricoes, eventos_list, zip_pdf_bytes):
+    """Uma seção completa (tomados OU prestados): códigos, contas, prévia e downloads."""
+    nome_modo = NOMES_MODO[modo]
+    nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
+
+    if df is None or df.empty:
+        st.info("Nenhuma nota " + ("PRESTADA" if eh_receita else "TOMADA") + " neste lote.")
+        return
+
+    st.caption(f"{len(df)} nota(s) " + ("prestadas" if eh_receita else "tomadas") + " neste lote.")
+
+    ausentes = editor_codigos_lote(
+        df, mapa_contas, caminho_arquivo_bd, modo, eh_receita, eh_dono,
+        mapa_descricoes=mapa_descricoes, chave_estado=f"sieg_{tipo}",
+    )
+
+    if ausentes:
+        if eh_dono:
+            st.warning(
+                f"⚠️ Existem códigos sem conta de {'RECEITA' if eh_receita else 'DESPESA'} {nome_modo} cadastrada. "
+                "Confira a tabela acima e clique em **💾 Salvar contas** para liberar a prévia e os downloads."
+            )
+        else:
+            st.error(f"⚠️ Os códigos `{', '.join(ausentes)}` não estão cadastrados. Solicite ao dono deste plano que adicione as contas.")
+        return
+
+    df_codigos_lote = tabela_codigos_lote(df, mapa_contas, modo, eh_receita, mapa_descricoes)
+
+    st.markdown("**🧾 Contas dos impostos e contrapartida**")
+    contas_editadas = desenhar_campos_contas(modo, eh_receita, f"conta_sieg_{tipo}")
+
+    df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo, contas_editadas, eh_receita=eh_receita)
+    df_substituidas = gerar_aba_substituidas(eventos_list, df)
+
+    st.markdown(f"**📊 Prévia - Aba {nome_aba}**")
+    st.dataframe(df_lancamentos, use_container_width=True)
+
+    buffer_excel = io.BytesIO()
+    with pd.ExcelWriter(buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy") as writer:
+        df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
+        df.drop(columns=["Nome do Tomador"], errors="ignore").to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
+        if not df_codigos_lote.empty:
+            df_codigos_lote.to_excel(writer, index=False, sheet_name="Códigos do Lote")
+        if not df_substituidas.empty:
+            df_substituidas.to_excel(writer, index=False, sheet_name="Notas Canceladas")
+
+    st.markdown("**📥 Downloads**")
+    mime_xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    base = f"importacao_{'dominio' if modo == 'dominio' else 'alterdata'}_{tipo}"
+
+    if modo == "dominio":
+        lote_inicial = st.number_input(
+            "Nº do primeiro lote (Domínio)", min_value=1, value=1, step=1, key=f"lote_{tipo}"
+        )
+        txt_dominio = gerar_txt_dominio(df_lancamentos, lote_inicial)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.download_button("📄 Baixar Layout Domínio (.txt)", data=txt_dominio,
+                               file_name=f"{base}.txt", mime="text/plain", key=f"dl_txt_{tipo}")
+        with col2:
+            st.download_button("📊 Baixar Planilha Domínio (.xlsx)", data=buffer_excel.getvalue(),
+                               file_name=f"{base}.xlsx", mime=mime_xlsx, key=f"dl_xlsx_{tipo}")
+        with col3:
+            if zip_pdf_bytes:
+                st.download_button("📦 Baixar PDFs Organizados (.zip)", data=zip_pdf_bytes,
+                                   file_name=f"NFS_PDFs_{tipo}.zip", mime="application/zip", key=f"dl_zip_{tipo}")
     else:
-        st.title("📥 SIEG XML - Serviços TOMADOS (Despesa)")
-    st.write("Faça o upload dos arquivos **XML**, **PDF** ou **ZIP**.")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button("📊 Baixar Planilha Alterdata (.xlsx)", data=buffer_excel.getvalue(),
+                               file_name=f"{base}.xlsx", mime=mime_xlsx, key=f"dl_xlsx_{tipo}")
+        with col2:
+            if zip_pdf_bytes:
+                st.download_button("📦 Baixar PDFs Organizados (.zip)", data=zip_pdf_bytes,
+                                   file_name=f"NFS_PDFs_{tipo}.zip", mime="application/zip", key=f"dl_zip_{tipo}")
+
+
+def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
+    st.title("📄 SIEG XML PARA Importação")
+    st.write(
+        "Faça o upload dos arquivos **XML**, **PDF** ou **ZIP** (pode ser tudo junto). "
+        "O sistema separa automaticamente em **Tomados** (despesa) e **Prestados** (receita) "
+        "pelo CNPJ da empresa selecionada."
+    )
 
     if mapa_contas is None and caminho_arquivo_bd:
         mapa_contas = carregar_banco_dados_github(caminho_arquivo_bd)
+
+    cnpj_emp_sel = limpar_cnpj(st.session_state.get("empresa_ativa_cnpj", ""))
+    if not cnpj_emp_sel:
+        st.warning(
+            "⚠️ A empresa selecionada não tem CNPJ cadastrado. Sem ele não dá para separar "
+            "Tomados de Prestados: todas as notas serão tratadas como TOMADAS."
+        )
 
     uploaded_files = st.file_uploader(
         "Arraste ou selecione os arquivos XML, PDF ou ZIP aqui",
         type=["xml", "pdf", "zip"],
         accept_multiple_files=True,
-        key=f"upload_sieg_{tipo}",
+        key="upload_sieg",
     )
 
     if uploaded_files:
-        filtrar_cnpj = st.checkbox(
-            "Filtrar automaticamente pelo CNPJ da empresa selecionada "
-            + ("(manter só notas em que ela é a PRESTADORA)" if eh_receita
-               else "(descartar notas em que ela é a prestadora)"),
-            value=True, key=f"filtro_cnpj_{tipo}",
-        )
         col_btn1, col_btn2, _ = st.columns([1, 1, 2])
         with col_btn1:
             processar_alterdata = st.button("🚀 Processar para Alterdata")
@@ -1087,8 +1178,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True, eh_
             processar_dominio = st.button("🚀 Processar para Domínio")
 
         if processar_alterdata or processar_dominio:
-            modo_escolhido = "dominio" if processar_dominio else "alterdata"
-            st.session_state["modo"] = modo_escolhido
+            st.session_state["modo"] = "dominio" if processar_dominio else "alterdata"
 
             temp_dir = tempfile.mkdtemp()
             xmls_para_processar = []
@@ -1108,8 +1198,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True, eh_
                     caminho_pdf = os.path.join(temp_dir, nome_arquivo)
                     with open(caminho_pdf, "wb") as f:
                         f.write(uploaded_file.getbuffer())
-                    nome_sem_ext = os.path.splitext(nome_arquivo)[0]
-                    pdfs_encontrados[nome_sem_ext] = caminho_pdf
+                    pdfs_encontrados[os.path.splitext(nome_arquivo)[0]] = caminho_pdf
 
                 elif extensao == ".zip":
                     caminho_zip = os.path.join(temp_dir, nome_arquivo)
@@ -1130,8 +1219,7 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True, eh_
                                 if ext == ".xml":
                                     xmls_para_processar.append(caminho_completo)
                                 elif ext == ".pdf":
-                                    nome_sem_ext = os.path.splitext(arq)[0]
-                                    pdfs_encontrados[nome_sem_ext] = caminho_completo
+                                    pdfs_encontrados[os.path.splitext(arq)[0]] = caminho_completo
                     except Exception as e:
                         st.error(f"Erro ao descompactar {nome_arquivo}: {e}")
 
@@ -1156,108 +1244,55 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True, eh_
                     progress_bar.progress((i + 1) / len(xmls_para_processar))
 
                 status_text.text("Extração concluída!")
+                if erros_processamento:
+                    st.warning("Arquivos com erro: " + "; ".join(erros_processamento))
 
-                df_nfse = pd.DataFrame(registros_nfse)
-                cnpj_emp_sel = limpar_cnpj(st.session_state.get("empresa_ativa_cnpj", ""))
-                qtd_fora = 0
-                if filtrar_cnpj and cnpj_emp_sel and not df_nfse.empty and "CNPJ Prestador" in df_nfse.columns:
-                    prest = df_nfse["CNPJ Prestador"].fillna("").apply(limpar_cnpj)
-                    mascara = (prest == cnpj_emp_sel) if eh_receita else (prest != cnpj_emp_sel)
-                    qtd_fora = int((~mascara).sum())
-                    df_nfse = df_nfse[mascara].reset_index(drop=True)
-                st.session_state["qtd_fora_sieg"] = qtd_fora
-                st.session_state["df_extrato"] = df_nfse
-                st.session_state["eventos_list"] = registros_eventos
-                st.session_state["zip_pdf_bytes"] = gerar_zip_pdfs_renomeados(df_nfse, pdfs_encontrados)
+                df_total = pd.DataFrame(registros_nfse)
 
-                mapa_tipo_servico_xml = {}
-                if not df_nfse.empty:
-                    for _, row in df_nfse.iterrows():
-                        cod = str(row.get("Código Tributação", "") or "").strip()
-                        tipo = str(row.get("Tipo de Serviço", "") or "").strip()
-                        if cod and tipo and cod not in mapa_tipo_servico_xml:
-                            mapa_tipo_servico_xml[cod] = tipo
-                st.session_state["mapa_tipo_servico_xml"] = mapa_tipo_servico_xml
+                # SEPARA TOMADOS x PRESTADOS PELO CNPJ DA EMPRESA
+                if not df_total.empty and "CNPJ Prestador" in df_total.columns and cnpj_emp_sel:
+                    prest = df_total["CNPJ Prestador"].fillna("").apply(limpar_cnpj)
+                    df_prest = df_total[prest == cnpj_emp_sel].reset_index(drop=True)
+                    df_tom = df_total[prest != cnpj_emp_sel].reset_index(drop=True)
+                else:
+                    df_tom, df_prest = df_total, pd.DataFrame()
+
+                # Eventos: vão para a seção onde estão as notas; os sem correspondência ficam em Tomados
+                ev_prest = _eventos_da_secao(registros_eventos, df_prest)
+                ev_tom = [e for e in registros_eventos if e not in ev_prest]
+
+                def mapa_desc(d):
+                    m = {}
+                    if d is not None and not d.empty:
+                        for _, row in d.iterrows():
+                            cod = str(row.get("Código Tributação", "") or "").strip()
+                            desc = str(row.get("Tipo de Serviço", "") or "").strip()
+                            if cod and desc and cod not in m:
+                                m[cod] = desc
+                    return m
+
+                st.session_state["sieg_resultado"] = {
+                    "tom": df_tom, "prest": df_prest,
+                    "ev_tom": ev_tom, "ev_prest": ev_prest,
+                    "zip_tom": gerar_zip_pdfs_renomeados(df_tom, pdfs_encontrados),
+                    "zip_prest": gerar_zip_pdfs_renomeados(df_prest, pdfs_encontrados),
+                    "desc_tom": mapa_desc(df_tom), "desc_prest": mapa_desc(df_prest),
+                }
+            else:
+                st.error("Nenhum arquivo XML encontrado nos arquivos enviados.")
 
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    if "df_extrato" in st.session_state and st.session_state["df_extrato"] is not None:
+    res = st.session_state.get("sieg_resultado")
+    if res:
         modo = st.session_state.get("modo", "alterdata")
-        nome_modo = NOMES_MODO[modo]
-        df = st.session_state["df_extrato"]
-        eventos_list = st.session_state.get("eventos_list", [])
-        mapa_tipo_servico_xml = st.session_state.get("mapa_tipo_servico_xml", {})
-        zip_pdf_bytes = st.session_state.get("zip_pdf_bytes")
-        if eh_receita:
-            st.success("💰 **TIPO DE OPERAÇÃO: RECEITA (SERVIÇOS PRESTADOS)**")
-        else:
-            st.info("🛒 **TIPO DE OPERAÇÃO: DESPESA (SERVIÇOS TOMADOS)**")
 
-        qtd_fora = st.session_state.get("qtd_fora_sieg", 0)
-        if qtd_fora:
-            st.warning(f"{qtd_fora} nota(s) do outro tipo (" + ("tomadas" if eh_receita else "prestadas") + ") foram descartadas pelo filtro de CNPJ.")
-        if df.empty:
-            st.error("Nenhuma nota deste tipo foi encontrada. Confira a empresa selecionada ou desmarque o filtro de CNPJ.")
-            return
+        st.markdown("---")
+        st.header("🛒 TOMADOS (Despesa - serviços tomados)")
+        _secao_sieg(res["tom"], False, "tomados", modo, mapa_contas, caminho_arquivo_bd, eh_dono,
+                    res["desc_tom"], res["ev_tom"], res["zip_tom"])
 
-        # ------------------------------------------------------------
-        # TABELA EDITÁVEL DE CÓDIGOS DO LOTE (um único botão para salvar)
-        # ------------------------------------------------------------
-        ausentes = editor_codigos_lote(
-            df, mapa_contas, caminho_arquivo_bd, modo, eh_receita, eh_dono,
-            mapa_descricoes=mapa_tipo_servico_xml, chave_estado=f"sieg_{tipo}",
-        )
-
-        if ausentes:
-            if eh_dono:
-                st.warning(
-                    f"⚠️ Existem códigos sem conta de {'RECEITA' if eh_receita else 'DESPESA'} {nome_modo} cadastrada. "
-                    "Confira a tabela acima e clique em **💾 Salvar contas** para liberar a prévia e os downloads."
-                )
-            else:
-                st.error(f"⚠️ Os códigos `{', '.join(ausentes)}` não estão cadastrados. Solicite ao dono deste plano que adicione as contas.")
-
-        else:
-            df_codigos_lote = tabela_codigos_lote(df, mapa_contas, modo, eh_receita, mapa_tipo_servico_xml)
-
-            st.subheader(f"🧾 Contas dos Impostos e Conta Contrapartida - {nome_modo}")
-            contas_editadas = desenhar_campos_contas(modo, eh_receita, f"conta_sieg_{tipo}")
-
-            df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo, contas_editadas, eh_receita=eh_receita)
-            df_substituidas = gerar_aba_substituidas(eventos_list, df)
-            nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
-
-            st.subheader(f"📊 Prévia - Aba {nome_aba}")
-            st.dataframe(df_lancamentos, use_container_width=True)
-
-            buffer_excel = io.BytesIO()
-            with pd.ExcelWriter(buffer_excel, engine="openpyxl", date_format="dd/mm/yyyy") as writer:
-                df_lancamentos.to_excel(writer, index=False, sheet_name=nome_aba)
-                df.drop(columns=["Nome do Tomador"], errors="ignore").to_excel(writer, index=False, sheet_name="NFS-e Extraídas")
-                if not df_codigos_lote.empty:
-                    df_codigos_lote.to_excel(writer, index=False, sheet_name="Códigos do Lote")
-                if not df_substituidas.empty:
-                    df_substituidas.to_excel(writer, index=False, sheet_name="Notas Canceladas")
-
-            st.markdown("---")
-            st.subheader("📥 Downloads Disponíveis")
-
-            if modo == "dominio":
-                lote_inicial = st.number_input("Nº do primeiro lote (Domínio)", min_value=1, value=1, step=1)
-                txt_dominio = gerar_txt_dominio(df_lancamentos, lote_inicial)
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.download_button("📄 Baixar Layout Domínio (.txt)", data=txt_dominio, file_name="importacao_dominio.txt", mime="text/plain")
-                with col2:
-                    st.download_button("📊 Baixar Planilha Domínio (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_dominio.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                with col3:
-                    if zip_pdf_bytes:
-                        st.download_button("📦 Baixar PDFs Organizados (.zip)", data=zip_pdf_bytes, file_name="NFS_PDFs_Organizados.zip", mime="application/zip")
-            else:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.download_button("📊 Baixar Planilha Alterdata (.xlsx)", data=buffer_excel.getvalue(), file_name="importacao_alterdata.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                with col2:
-                    if zip_pdf_bytes:
-                        st.download_button("📦 Baixar PDFs Organizados (.zip)", data=zip_pdf_bytes, file_name="NFS_PDFs_Organizados.zip", mime="application/zip")
+        st.markdown("---")
+        st.header("💰 PRESTADOS (Receita - serviços prestados)")
+        _secao_sieg(res["prest"], True, "prestados", modo, mapa_contas, caminho_arquivo_bd, eh_dono,
+                    res["desc_prest"], res["ev_prest"], res["zip_prest"])
