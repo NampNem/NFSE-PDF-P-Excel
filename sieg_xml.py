@@ -129,6 +129,16 @@ def converter_data_obj(data_str):
         return None
 
 
+def ultimo_dia_do_mes(data):
+    """Recebe uma date e devolve o último dia do mesmo mês (ex.: 15/08 -> 31/08)."""
+    if data is None:
+        return None
+    try:
+        return (pd.Timestamp(data) + pd.offsets.MonthEnd(0)).date()
+    except Exception:
+        return data
+
+
 def extrair_pasta_mes_ano(data_str):
     if not data_str:
         return "SEM_DATA"
@@ -608,7 +618,8 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
 
     for _, row in df_extrato.iterrows():
         num_nota = str(row.get("Número da NFS-e", "") or "").strip()
-        data_comp = converter_data_obj(row.get("Data Competência", ""))
+        # Data do lançamento = ÚLTIMO DIA do mês de competência
+        data_comp = ultimo_dia_do_mes(converter_data_obj(row.get("Data Competência", "")))
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
         descr_servico = str(mapa_contas.get(cod_trib, {}).get("descricao") or row.get("Tipo de Serviço") or "SERVIÇO").strip()
@@ -853,27 +864,34 @@ def gerar_aba_substituidas(eventos_list, df_nfse):
     return pd.DataFrame(linhas_subst)
 
 
-def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados):
-    if not pdfs_mapeados or df_nfse.empty:
+def gerar_zip_pdfs_renomeados(df_nfse, pdfs_mapeados, df_canceladas=None):
+    """ZIP com PDFs por mês/ano; as notas canceladas vão para a pasta CANCELADAS."""
+    sem_ativas = df_nfse is None or df_nfse.empty
+    sem_canc = df_canceladas is None or df_canceladas.empty
+    if not pdfs_mapeados or (sem_ativas and sem_canc):
         return None
 
     zip_buffer = io.BytesIO()
+    escritos = 0
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_out:
-        for _, row in df_nfse.iterrows():
-            chave = str(row.get("Chave NFS-e", "")).strip()
-            num_nota = str(row.get("Número da NFS-e", "")).strip()
-            fornecedor = limpar_nome_arquivo(row.get("Nome da Empresa", "FORNECEDOR"))
-            pasta_mes = extrair_pasta_mes_ano(row.get("Data Competência"))
+        for df_origem, pasta_fixa in ((df_nfse, None), (df_canceladas, "CANCELADAS")):
+            if df_origem is None or df_origem.empty:
+                continue
+            for _, row in df_origem.iterrows():
+                chave = str(row.get("Chave NFS-e", "")).strip()
+                num_nota = str(row.get("Número da NFS-e", "")).strip()
+                fornecedor = limpar_nome_arquivo(row.get("Nome da Empresa", "FORNECEDOR"))
+                pasta = pasta_fixa or extrair_pasta_mes_ano(row.get("Data Competência"))
 
-            caminho_pdf_original = pdfs_mapeados.get(chave) or pdfs_mapeados.get(num_nota)
+                caminho_pdf_original = pdfs_mapeados.get(chave) or pdfs_mapeados.get(num_nota)
 
-            if caminho_pdf_original and os.path.exists(caminho_pdf_original):
-                nome_pdf = f"{fornecedor} - NF {num_nota}.pdf"
-                caminho_no_zip = os.path.join(pasta_mes, nome_pdf)
-                zip_out.write(caminho_pdf_original, arcname=caminho_no_zip)
+                if caminho_pdf_original and os.path.exists(caminho_pdf_original):
+                    nome_pdf = f"{fornecedor} - NF {num_nota}.pdf"
+                    zip_out.write(caminho_pdf_original, arcname=os.path.join(pasta, nome_pdf))
+                    escritos += 1
 
     zip_buffer.seek(0)
-    return zip_buffer.getvalue() if zip_buffer.getbuffer().nbytes > 0 else None
+    return zip_buffer.getvalue() if escritos > 0 else None
 
 
 # ============================================================
@@ -1055,6 +1073,19 @@ def desenhar_campos_contas(modo, eh_receita, prefixo_key):
     return contas_editadas
 
 
+def eh_evento_cancelamento(ev):
+    """True para cancelamento / substituição (ignora outros eventos, ex.: manifestações)."""
+    if ev.get("Chave NFS-e Substituta"):
+        return True
+    desc = str(ev.get("Descrição Evento", "") or "").lower()
+    return "cancel" in desc or not desc
+
+
+def _juntar_dfs(*dfs):
+    validos = [d for d in dfs if d is not None and not d.empty]
+    return pd.concat(validos, ignore_index=True) if validos else pd.DataFrame()
+
+
 def _eventos_da_secao(eventos_list, df):
     """Eventos (cancelamentos/substituições) cujas chaves pertencem às notas desta seção."""
     if df is None or df.empty or "Chave NFS-e" not in df.columns:
@@ -1067,17 +1098,49 @@ def _eventos_da_secao(eventos_list, df):
     ]
 
 
+def _downloads_canceladas(df_ref, eventos_list, zip_pdf_bytes, tipo):
+    df_subst = gerar_aba_substituidas(eventos_list, df_ref)
+    if df_subst.empty:
+        return
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df_subst.to_excel(writer, index=False, sheet_name="Notas Canceladas")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("📊 Baixar relatório de canceladas (.xlsx)", data=buf.getvalue(),
+                           file_name=f"canceladas_{tipo}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key=f"dl_canc_xlsx_{tipo}")
+    with c2:
+        if zip_pdf_bytes:
+            st.download_button("📦 Baixar PDFs das canceladas (.zip)", data=zip_pdf_bytes,
+                               file_name=f"NFS_PDFs_canceladas_{tipo}.zip", mime="application/zip",
+                               key=f"dl_canc_zip_{tipo}")
+
+
 def _secao_sieg(df, eh_receita, tipo, modo, mapa_contas, caminho_arquivo_bd, eh_dono,
-                mapa_descricoes, eventos_list, zip_pdf_bytes):
+                mapa_descricoes, eventos_list, zip_pdf_bytes, df_ref=None, df_canc=None):
     """Uma seção completa (tomados OU prestados): códigos, contas, prévia e downloads."""
     nome_modo = NOMES_MODO[modo]
     nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
 
+    qtd_canc = 0 if df_canc is None else len(df_canc)
+    if df_ref is None:
+        df_ref = df
+
     if df is None or df.empty:
-        st.info("Nenhuma nota " + ("PRESTADA" if eh_receita else "TOMADA") + " neste lote.")
+        st.info("Nenhuma nota " + ("PRESTADA" if eh_receita else "TOMADA") + " ativa neste lote.")
+        if qtd_canc:
+            st.caption(f"{qtd_canc} nota(s) cancelada(s) (fora da importação):")
+            _downloads_canceladas(df_ref, eventos_list, zip_pdf_bytes, tipo)
         return
 
     st.caption(f"{len(df)} nota(s) " + ("prestadas" if eh_receita else "tomadas") + " neste lote.")
+    if qtd_canc:
+        st.info(
+            f"🚫 {qtd_canc} nota(s) cancelada(s) ficaram FORA da importação. "
+            "Elas estão na aba **Notas Canceladas** do Excel e na pasta **CANCELADAS** do ZIP."
+        )
 
     ausentes = editor_codigos_lote(
         df, mapa_contas, caminho_arquivo_bd, modo, eh_receita, eh_dono,
@@ -1100,7 +1163,7 @@ def _secao_sieg(df, eh_receita, tipo, modo, mapa_contas, caminho_arquivo_bd, eh_
     contas_editadas = desenhar_campos_contas(modo, eh_receita, f"conta_sieg_{tipo}")
 
     df_lancamentos = gerar_aba_alterdata(df, mapa_contas, modo, contas_editadas, eh_receita=eh_receita)
-    df_substituidas = gerar_aba_substituidas(eventos_list, df)
+    df_substituidas = gerar_aba_substituidas(eventos_list, df_ref)
 
     st.markdown(f"**📊 Prévia - Aba {nome_aba}**")
     st.dataframe(df_lancamentos, use_container_width=True)
@@ -1249,17 +1312,31 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
 
                 df_total = pd.DataFrame(registros_nfse)
 
-                # SEPARA TOMADOS x PRESTADOS PELO CNPJ DA EMPRESA
-                if not df_total.empty and "CNPJ Prestador" in df_total.columns and cnpj_emp_sel:
-                    prest = df_total["CNPJ Prestador"].fillna("").apply(limpar_cnpj)
-                    df_prest = df_total[prest == cnpj_emp_sel].reset_index(drop=True)
-                    df_tom = df_total[prest != cnpj_emp_sel].reset_index(drop=True)
+                # NOTAS CANCELADAS: saem da importação, mas ficam no relatório e no ZIP
+                eventos_canc = [e for e in registros_eventos if eh_evento_cancelamento(e)]
+                chaves_canc = {str(e.get("Chave NFS-e Original", "")).strip() for e in eventos_canc} - {""}
+                if not df_total.empty and "Chave NFS-e" in df_total.columns and chaves_canc:
+                    eh_canc = df_total["Chave NFS-e"].astype(str).str.strip().isin(chaves_canc)
+                    df_canc = df_total[eh_canc].reset_index(drop=True)
+                    df_total = df_total[~eh_canc].reset_index(drop=True)
                 else:
-                    df_tom, df_prest = df_total, pd.DataFrame()
+                    df_canc = pd.DataFrame()
 
-                # Eventos: vão para a seção onde estão as notas; os sem correspondência ficam em Tomados
-                ev_prest = _eventos_da_secao(registros_eventos, df_prest)
-                ev_tom = [e for e in registros_eventos if e not in ev_prest]
+                # SEPARA TOMADOS x PRESTADOS PELO CNPJ DA EMPRESA
+                def separar(d):
+                    if d is not None and not d.empty and "CNPJ Prestador" in d.columns and cnpj_emp_sel:
+                        prest = d["CNPJ Prestador"].fillna("").apply(limpar_cnpj)
+                        return d[prest != cnpj_emp_sel].reset_index(drop=True), d[prest == cnpj_emp_sel].reset_index(drop=True)
+                    return d, pd.DataFrame()
+
+                df_tom, df_prest = separar(df_total)
+                canc_tom, canc_prest = separar(df_canc)
+                ref_tom = _juntar_dfs(df_tom, canc_tom)
+                ref_prest = _juntar_dfs(df_prest, canc_prest)
+
+                # Eventos vão para a seção onde estão as notas; sem correspondência ficam em Tomados
+                ev_prest = _eventos_da_secao(eventos_canc, ref_prest)
+                ev_tom = [e for e in eventos_canc if e not in ev_prest]
 
                 def mapa_desc(d):
                     m = {}
@@ -1273,9 +1350,11 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
 
                 st.session_state["sieg_resultado"] = {
                     "tom": df_tom, "prest": df_prest,
+                    "canc_tom": canc_tom, "canc_prest": canc_prest,
+                    "ref_tom": ref_tom, "ref_prest": ref_prest,
                     "ev_tom": ev_tom, "ev_prest": ev_prest,
-                    "zip_tom": gerar_zip_pdfs_renomeados(df_tom, pdfs_encontrados),
-                    "zip_prest": gerar_zip_pdfs_renomeados(df_prest, pdfs_encontrados),
+                    "zip_tom": gerar_zip_pdfs_renomeados(df_tom, pdfs_encontrados, canc_tom),
+                    "zip_prest": gerar_zip_pdfs_renomeados(df_prest, pdfs_encontrados, canc_prest),
                     "desc_tom": mapa_desc(df_tom), "desc_prest": mapa_desc(df_prest),
                 }
             else:
@@ -1290,9 +1369,11 @@ def pagina_sieg_xml(mapa_contas=None, caminho_arquivo_bd=None, eh_dono=True):
         st.markdown("---")
         st.header("🛒 TOMADOS (Despesa - serviços tomados)")
         _secao_sieg(res["tom"], False, "tomados", modo, mapa_contas, caminho_arquivo_bd, eh_dono,
-                    res["desc_tom"], res["ev_tom"], res["zip_tom"])
+                    res["desc_tom"], res["ev_tom"], res["zip_tom"],
+                    df_ref=res["ref_tom"], df_canc=res["canc_tom"])
 
         st.markdown("---")
         st.header("💰 PRESTADOS (Receita - serviços prestados)")
         _secao_sieg(res["prest"], True, "prestados", modo, mapa_contas, caminho_arquivo_bd, eh_dono,
-                    res["desc_prest"], res["ev_prest"], res["zip_prest"])
+                    res["desc_prest"], res["ev_prest"], res["zip_prest"],
+                    df_ref=res["ref_prest"], df_canc=res["canc_prest"])
