@@ -280,16 +280,22 @@ def menu_principal():
     st.title("🗂️ Meus Sistemas")
     st.write("Escolha a opção que deseja acessar:")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
-        if st.button("📄 SIEG XML PARA Importação", use_container_width=True):
-            st.session_state["pagina"] = "sieg"
+        if st.button("📥 SIEG XML - TOMADOS (Despesa)", use_container_width=True):
+            st.session_state["pagina"] = "sieg_tomados"
             st.rerun()
     with col2:
+        if st.button("📤 SIEG XML - PRESTADOS (Receita)", use_container_width=True):
+            st.session_state["pagina"] = "sieg_prestados"
+            st.rerun()
+
+    col3, col4 = st.columns(2)
+    with col3:
         if st.button("📊 Excel NFS-e (Portal Nacional)", use_container_width=True):
             st.session_state["pagina"] = "excel_nfse"
             st.rerun()
-    with col3:
+    with col4:
         if st.button("📝 Alterar Plano de Contas", use_container_width=True):
             st.session_state["pagina"] = "alterar_plano"
             st.rerun()
@@ -315,12 +321,21 @@ if pagina_atual != "menu":
 # ------------------------------------------------------------
 # OPÇÃO 1: SIEG XML
 # ------------------------------------------------------------
-if pagina_atual == "sieg":
+if pagina_atual in ("sieg_tomados", "sieg_prestados"):
     from sieg_xml import pagina_sieg_xml
+
+    # Ao trocar de tela (tomados <-> prestados), limpa o resultado anterior
+    if st.session_state.get("sieg_tipo_carregado") != pagina_atual:
+        for k in ("df_extrato", "eventos_list", "zip_pdf_bytes",
+                  "mapa_tipo_servico_xml", "modo", "qtd_fora_sieg"):
+            st.session_state.pop(k, None)
+        st.session_state["sieg_tipo_carregado"] = pagina_atual
+
     mapa_contas, caminho_arquivo_bd, eh_dono = selecionar_plano_de_contas()
     st.markdown("---")
     if mapa_contas is not None:
-        pagina_sieg_xml(mapa_contas, caminho_arquivo_bd, eh_dono)
+        pagina_sieg_xml(mapa_contas, caminho_arquivo_bd, eh_dono,
+                        eh_receita=(pagina_atual == "sieg_prestados"))
 
 # ------------------------------------------------------------
 # OPÇÃO 2: EXCEL NFSE
@@ -335,6 +350,7 @@ elif pagina_atual == "excel_nfse":
         tabela_codigos_lote,
         CONTAS,
         NOMES_MODO,
+        desenhar_campos_contas,
     )
     from leitor_excel import extrair_nfse_excel
 
@@ -410,24 +426,7 @@ elif pagina_atual == "excel_nfse":
 
             else:
                 st.subheader(f"🧾 Contas dos Impostos e Contrapartida - {nome_modo}")
-                padrao = CONTAS[modo]
-                rotulo_principal = "Clientes (Débito)" if eh_receita else "Fornecedores (Crédito)"
-
-                campos_contas = [
-                    ("credito_principal", rotulo_principal),
-                    ("pcc", "PIS / COFINS / CSLL"),
-                    ("irrf", "IRRF"),
-                    ("inss", "INSS"),
-                    ("iss", "ISS"),
-                    ("historico", "Histórico Padrão"),
-                ]
-
-                contas_editadas = dict(padrao)
-                cols = st.columns(len(campos_contas))
-                for col, (chave, rotulo) in zip(cols, campos_contas):
-                    with col:
-                        v_dig = st.text_input(rotulo, value=padrao.get(chave, ""), key=f"v2_cnt_{modo}_{chave}")
-                        contas_editadas[chave] = v_dig.strip() or padrao.get(chave, "")
+                contas_editadas = desenhar_campos_contas(modo, eh_receita, "v2_cnt")
 
                 df_lancamentos = gerar_aba_alterdata(df_nfse, mapa_contas, modo, contas_editadas, eh_receita=eh_receita)
                 nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
