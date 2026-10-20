@@ -40,7 +40,7 @@ CONTAS = {
         "irrf": "178",
         "inss": "184",
         "iss": "183",
-        "historico": "99",
+        "historico": "",  # Domínio: código de histórico fica vazio
     },
 }
 
@@ -611,7 +611,8 @@ def extrair_xml(caminho_ou_conteudo):
 
 def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, eh_receita=False):
     contas = contas or CONTAS[modo]
-    historico = str(contas.get("historico", "99")).strip() or "99"
+    padrao_hist = "" if modo == "dominio" else "99"
+    historico = str(contas.get("historico", padrao_hist)).strip() or padrao_hist
     if historico.isdigit():
         historico = int(historico)
     linhas_alterdata = []
@@ -810,7 +811,8 @@ def gerar_txt_dominio(df_dominio, lote_inicial=1):
             lote_txt = ""
         anterior_so_debito = bool(deb and not cred)
 
-        linhas.append(f"{data_txt};{deb};{cred};{valor_txt};{hist};{lote_txt};;;")
+        # Campo "Cód. Histórico" fica vazio; o texto vai para o campo "Histórico" (1 coluna à direita)
+        linhas.append(f"{data_txt};{deb};{cred};{valor_txt};;{hist};{lote_txt};;;")
 
     conteudo = "\r\n".join(linhas) + "\r\n"
     return conteudo.encode("cp1252", errors="replace")
