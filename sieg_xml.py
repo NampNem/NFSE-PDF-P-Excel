@@ -139,6 +139,21 @@ def ultimo_dia_do_mes(data):
         return data
 
 
+def data_lancamento(data_competencia, data_geracao):
+    """
+    Regra da data do lançamento:
+      - Mês/ano da geração da NF == mês/ano da competência -> usa a DATA DA GERAÇÃO da NF.
+      - Mês/ano divergentes (ou sem data de geração)        -> usa o ÚLTIMO DIA do mês da competência.
+    """
+    comp = converter_data_obj(data_competencia)
+    ger = converter_data_obj(data_geracao)
+    if comp is None:
+        return ger
+    if ger is not None and (ger.year, ger.month) == (comp.year, comp.month):
+        return ger
+    return ultimo_dia_do_mes(comp)
+
+
 def extrair_pasta_mes_ano(data_str):
     if not data_str:
         return "SEM_DATA"
@@ -496,6 +511,12 @@ def extrair_xml(caminho_ou_conteudo):
 
     numero_nfse = get_text(root, "nNFSe") or get_text(root, "Numero")
     data_competencia = get_text(root, "dCompet") or get_text(root, "DataEmissao")
+    # Data de geração da NFS-e (processamento); fallback para a emissão
+    data_geracao = (
+        get_text(root, "dhProc")
+        or get_text(root, "dhEmi")
+        or get_text(root, "DataEmissao")
+    )
 
     emit_node = find_tag(root, "emit") or find_tag(root, "PrestadorServico") or find_tag(root, "Prestador")
 
@@ -581,6 +602,7 @@ def extrair_xml(caminho_ou_conteudo):
         "Chave NFS-e": chave_nfse,
         "Número da NFS-e": numero_nfse,
         "Data Competência": data_competencia,
+        "Data Geração": data_geracao,
         "CNPJ Prestador": limpar_cnpj(cnpj_prestador),
         "Nome da Empresa": nome_empresa,
         "Nome do Tomador": nome_tomador,
@@ -619,8 +641,9 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
 
     for _, row in df_extrato.iterrows():
         num_nota = str(row.get("Número da NFS-e", "") or "").strip()
-        # Data do lançamento = ÚLTIMO DIA do mês de competência
-        data_comp = ultimo_dia_do_mes(converter_data_obj(row.get("Data Competência", "")))
+        # Data do lançamento: data de geração da NF se for do mesmo mês da competência;
+        # se o mês divergir, usa o ÚLTIMO DIA do mês de competência
+        data_comp = data_lancamento(row.get("Data Competência", ""), row.get("Data Geração", ""))
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
         descr_servico = str(mapa_contas.get(cod_trib, {}).get("descricao") or row.get("Tipo de Serviço") or "SERVIÇO").strip()
