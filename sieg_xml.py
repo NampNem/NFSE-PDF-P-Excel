@@ -139,16 +139,29 @@ def ultimo_dia_do_mes(data):
         return data
 
 
-def data_lancamento(data_competencia, data_geracao):
+REGRAS_DATA = {
+    "auto": "Automática: data de geração se for do mesmo mês da competência; senão, último dia do mês da competência",
+    "competencia": "Sempre o último dia do mês de referência (competência)",
+    "geracao": "Sempre a data de geração (emissão) da nota",
+}
+
+
+def data_lancamento(data_competencia, data_geracao, regra="auto"):
     """
-    Regra da data do lançamento:
-      - Mês/ano da geração da NF == mês/ano da competência -> usa a DATA DA GERAÇÃO da NF.
-      - Mês/ano divergentes (ou sem data de geração)        -> usa o ÚLTIMO DIA do mês da competência.
+    Data do lançamento conforme a regra escolhida:
+      - "auto":        mês/ano da geração == competência -> data da geração;
+                       divergentes (ou sem geração)      -> último dia do mês da competência.
+      - "competencia": sempre o último dia do mês da competência.
+      - "geracao":     sempre a data de geração (se faltar, cai no último dia da competência).
     """
     comp = converter_data_obj(data_competencia)
     ger = converter_data_obj(data_geracao)
+    if regra == "geracao":
+        return ger if ger is not None else ultimo_dia_do_mes(comp)
     if comp is None:
         return ger
+    if regra == "competencia":
+        return ultimo_dia_do_mes(comp)
     if ger is not None and (ger.year, ger.month) == (comp.year, comp.month):
         return ger
     return ultimo_dia_do_mes(comp)
@@ -631,7 +644,7 @@ def extrair_xml(caminho_ou_conteudo):
     }
 
 
-def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, eh_receita=False):
+def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, eh_receita=False, regra_data="auto"):
     contas = contas or CONTAS[modo]
     padrao_hist = "" if modo == "dominio" else "99"
     historico = str(contas.get("historico", padrao_hist)).strip() or padrao_hist
@@ -643,7 +656,7 @@ def gerar_aba_alterdata(df_extrato, mapa_contas, modo="alterdata", contas=None, 
         num_nota = str(row.get("Número da NFS-e", "") or "").strip()
         # Data do lançamento: data de geração da NF se for do mesmo mês da competência;
         # se o mês divergir, usa o ÚLTIMO DIA do mês de competência
-        data_comp = data_lancamento(row.get("Data Competência", ""), row.get("Data Geração", ""))
+        data_comp = data_lancamento(row.get("Data Competência", ""), row.get("Data Geração", ""), regra_data)
         nome_empresa = str(row.get("Nome da Empresa", "") or "").strip()
         cod_trib = str(row.get("Código Tributação", "") or "").strip()
         descr_servico = str(mapa_contas.get(cod_trib, {}).get("descricao") or row.get("Tipo de Serviço") or "SERVIÇO").strip()
