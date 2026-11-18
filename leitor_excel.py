@@ -61,6 +61,20 @@ def _data_iso(v):
     return "" if pd.isna(dt) else dt.strftime("%Y-%m-%d")
 
 
+def _primeira_data(row, nomes):
+    """Primeira coluna da lista que tiver uma data válida (aceita variações de nome)."""
+    for n in nomes:
+        d = _data_iso(row.get(n))
+        if d:
+            return d
+    return ""
+
+
+COLS_COMPETENCIA = ["Competência", "Data Competência", "Competencia"]
+COLS_GERACAO = ["Data Geração", "Data de Geração", "Data Emissão", "Data de Emissão",
+                "Data Emissão NFS-e", "Emissão", "Data/Hora Emissão", "Data Hora Emissão"]
+
+
 def extrair_nfse_excel(origem, formatar_valor_fn):
     xls = pd.ExcelFile(origem)
     aba = ABA_PREFERIDA if ABA_PREFERIDA in xls.sheet_names else xls.sheet_names[0]
@@ -138,7 +152,8 @@ def extrair_nfse_excel(origem, formatar_valor_fn):
             "tipo_xml": "NFSE",
             "Chave NFS-e": _texto(row.get("Chave NFS-e")),
             "Número da NFS-e": numero,
-            "Data Competência": _data_iso(row.get("Competência") or row.get("Data Competência") or row.get("Data Geração")),
+            "Data Competência": _primeira_data(row, COLS_COMPETENCIA) or _primeira_data(row, COLS_GERACAO),
+            "Data Geração": _primeira_data(row, COLS_GERACAO),
             "CNPJ Prestador": cnpj_formatado,
             "Nome da Empresa": nome_empresa,
             "Nome do Tomador": nome_tomador,
