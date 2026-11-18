@@ -336,6 +336,7 @@ elif pagina_atual == "excel_nfse":
         CONTAS,
         NOMES_MODO,
         desenhar_campos_contas,
+        REGRAS_DATA,
     )
     from leitor_excel import extrair_nfse_excel
 
@@ -410,10 +411,21 @@ elif pagina_atual == "excel_nfse":
                     st.error(f"⚠️️ Existem códigos sem conta cadastrada (`{', '.join(ausentes)}`). Como você está no modo apenas leitura, peça ao dono do plano para registrá-los.")
 
             else:
+                st.subheader("📅 Data do Lançamento")
+                regra_data = st.radio(
+                    "Qual data usar nos lançamentos?",
+                    options=list(REGRAS_DATA.keys()),
+                    format_func=lambda k: REGRAS_DATA[k],
+                    key="regra_data_excel",
+                )
+
                 st.subheader(f"🧾 Contas dos Impostos e Contrapartida - {nome_modo}")
                 contas_editadas = desenhar_campos_contas(modo, eh_receita, "v2_cnt")
 
-                df_lancamentos = gerar_aba_alterdata(df_nfse, mapa_contas, modo, contas_editadas, eh_receita=eh_receita)
+                df_lancamentos = gerar_aba_alterdata(
+                    df_nfse, mapa_contas, modo, contas_editadas,
+                    eh_receita=eh_receita, regra_data=regra_data,
+                )
                 nome_aba = "Domínio" if modo == "dominio" else "Alterdata"
 
                 st.subheader(f"📊 Prévia dos Lançamentos ({nome_aba})")
